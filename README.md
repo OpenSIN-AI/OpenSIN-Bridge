@@ -1,4 +1,4 @@
-# OpenSIN-Bridge
+# OpenSIN-Bridge\n\n> **OpenSIN ist keine Software. Es ist eine digitale Belegschaft.**\n> Die Bridge ist die sichere Tuer, durch die Nutzer auf die Intelligenz unserer Agenten zugreifen. Der Agent arbeitet (z.B. auf Prolific), die Intelligenz bleibt im Server.\n
 
 > **Paid SaaS Chrome Extension (5 EUR/month) — Thin-Client Architecture**
 >
