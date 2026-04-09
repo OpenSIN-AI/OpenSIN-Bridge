@@ -106,7 +106,7 @@ Chrome Web Store
                               |                       +-> Usage logs
                               |                       +-> License keys
                               |
-                              +---> [Stripe API]
+                              +---> [A2A-SIN-Stripe]
                               |       +-> Checkout Sessions
                               |       +-> Webhook Events
                               |       +-> Customer Portal
