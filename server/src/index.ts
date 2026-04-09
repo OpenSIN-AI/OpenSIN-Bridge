@@ -61,10 +61,17 @@ async function validateAuth(request: Request, env: Env) {
 }
 
 async function checkSubscription(userId: string, env: Env) {
-  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/subscriptions?user_id=eq.${userId}&status=eq.active&select=id`, {
-    headers: { 'apikey': env.SUPABASE_SERVICE_KEY, 'Authorization': `Bearer ${env.SUPABASE_SERVICE_KEY}` },
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/check_active_subscription`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': env.SUPABASE_SERVICE_KEY,
+      'Authorization': `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+    },
+    body: JSON.stringify({ p_user_id: userId }),
   });
-  return res.ok && ((await res.json() as any[]).length > 0);
+  if (!res.ok) return false;
+  return (await res.json()) === true;
 }
 
 // Secret Sauce: The Decision Engine
@@ -130,8 +137,48 @@ async function handleEvaluateStudy(request: Request, userId: string, env: Env, h
 }
 
 async function handleLogin(request: Request, env: Env, headers: Record<string, string>) {
-  return json({ error: 'Supabase integration required for login' }, 501, headers);
+  const { email, password } = await request.json() as { email: string; password: string };
+  if (!email || !password) return json({ error: 'email and password required' }, 400, headers);
+
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': env.SUPABASE_SERVICE_KEY,
+    },
+    body: JSON.stringify({ email, password }),
+  });
+
+  const data = await res.json() as any;
+  if (!res.ok) return json({ error: data.error_description || data.msg || 'Login failed' }, 401, headers);
+
+  return json({
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_in: data.expires_in,
+    user: { id: data.user?.id, email: data.user?.email },
+  }, 200, headers);
 }
+
 async function handleRefresh(request: Request, env: Env, headers: Record<string, string>) {
-  return json({ error: 'Supabase integration required for refresh' }, 501, headers);
+  const { refresh_token } = await request.json() as { refresh_token: string };
+  if (!refresh_token) return json({ error: 'refresh_token required' }, 400, headers);
+
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': env.SUPABASE_SERVICE_KEY,
+    },
+    body: JSON.stringify({ refresh_token }),
+  });
+
+  const data = await res.json() as any;
+  if (!res.ok) return json({ error: data.error_description || 'Refresh failed' }, 401, headers);
+
+  return json({
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_in: data.expires_in,
+  }, 200, headers);
 }
