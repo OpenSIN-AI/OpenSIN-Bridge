@@ -1,42 +1,66 @@
 {
-  "manifest_version": 3,
-  "name": "OpenSIN Bridge",
-  "version": "1.0.0",
-  "description": "Autonomous browser automation powered by AI. Requires active subscription.",
-  "permissions": [
-    "storage",
-    "activeTab",
-    "tabs"
-  ],
-  "host_permissions": [
-    "https://api.opensin.ai/*",
-    "https://*.prolific.com/*"
-  ],
-  "background": {
-    "service_worker": "background/service-worker.js",
-    "type": "module"
-  },
-  "content_scripts": [
-    {
-      "matches": ["https://*.prolific.com/*"],
-      "js": ["content/bridge-client.js"],
-      "run_at": "document_idle"
-    }
-  ],
-  "action": {
-    "default_popup": "popup/popup.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
-  }
+    "manifest_version": 3,
+    "name": "OpenSIN Bridge",
+    "version": "4.0.0",
+    "description": "OpenSIN Browser Automation & Auth Platform (Antigravity-Level+)",
+    "action": {
+        "default_title": "OpenSIN Bridge",
+        "default_icon": {
+            "16": "static/icons/16.png",
+            "48": "static/icons/48.png",
+            "128": "static/icons/128.png"
+        }
+    },
+    "background": {
+        "service_worker": "background/service_worker.js",
+        "type": "module"
+    },
+    "chrome_url_overrides": {
+        "newtab": "static/browserLanding.html"
+    },
+    "content_scripts": [
+        {
+            "all_frames": true,
+            "js": [
+                "content/injector.js"
+            ],
+            "matches": [
+                "<all_urls>"
+            ],
+            "run_at": "document_start",
+            "world": "MAIN"
+        }
+    ],
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; connect-src 'self' wss://openjerro-opensin-bridge-mcp.hf.space ws://localhost:*; frame-src http://localhost:*;"
+    },
+    "externally_connectable": {
+        "matches": [
+            "https://opensin.ai/*",
+            "http://localhost/*",
+            "http://127.0.0.1/*"
+        ]
+    },
+    "host_permissions": [
+        "<all_urls>"
+    ],
+    "icons": {
+        "16": "static/icons/16.png",
+        "48": "static/icons/48.png",
+        "128": "static/icons/128.png"
+    },
+    "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmnTx47DosuBK2cI8q+aUVYQc+MIxtATqRJkGO7yJO4/nFU6CyiCe4PDQ/L6uQw24mX079xsWXVOreLD565b0t2AMr8fzNJiUSyzvslE1grb7tqNDT97WYRma8EyrKDasb+pLE/TkSmqpafFxpQfbhBNb0RTb2l/nqAS9QW5WqjaAeUBCGQrenuKUkCX2/+xCACEAfpSg+uijtR0gbuJCjT4oPgJynSQxVbzZ38mKIQcWauY/CcNRD2RuCQwlxHWm0YqrQfVWnxoDR8oMhujVfdmKEKd8hW24C3DqqidVAMjk0qNlnTGbPeJBjdO/ogFmL8CXiE1dYYqD6Dxb8MqmoQIDAQAB",
+    "permissions": [
+        "activeTab",
+        "tabs",
+        "webRequest",
+        "storage",
+        "offscreen",
+        "cookies",
+        "nativeMessaging",
+        "scripting",
+        "declarativeNetRequest",
+        "alarms",
+        "debugger"
+    ]
 }
