@@ -1,0 +1,1 @@
+After code changes, run the most targeted verification available for the affected area. For extension changes, at minimum run a syntax/runtime smoke check or targeted node-based verification if no formal tests exist, and summarize any remaining manual Chrome verification needed. If packaging or deployment behavior changed, consider npm run ext:package or npm run build.

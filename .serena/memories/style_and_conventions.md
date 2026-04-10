@@ -1,0 +1,1 @@
+Current codebase uses vanilla JavaScript for the Chrome extension and TypeScript on the server side. Follow existing minimal, utility-first patterns in the extension service worker: plain async functions, direct Chrome API usage, and small helper functions over abstractions. Prefer backward-compatible changes and keep MV3/service-worker constraints in mind.

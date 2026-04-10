@@ -1,3 +1,19 @@
+# ==============================================================================
+# OpenSIN Component: setup_supabase.sh
+# ==============================================================================
+# 
+# DESCRIPTION / BESCHREIBUNG:
+# Source file for the OpenSIN ecosystem.
+# 
+# WHY IT EXISTS / WARUM ES EXISTIERT:
+# Essential logic for autonomous agent cooperation.
+# 
+# CONSEQUENCES / KONSEQUENZEN:
+# Incorrect modification may disrupt agent communication or task execution.
+# 
+# AUTHOR: SIN-Zeus / A2A Fleet
+# ==============================================================================
+
 #!/usr/bin/env bash
 # Applies the Supabase schema to the project's Supabase instance.
 # Prerequisites: supabase CLI installed and linked, OR psql available.

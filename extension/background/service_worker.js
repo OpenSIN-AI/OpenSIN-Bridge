@@ -1,14 +1,151 @@
+/**
+ * ==============================================================================
+ * OpenSIN Component: service_worker.js
+ * ==============================================================================
+ * 
+ * DESCRIPTION / BESCHREIBUNG:
+ * Background service worker for the OpenSIN Bridge extension.
+ * 
+ * WHY IT EXISTS / WARUM ES EXISTIERT:
+ * Acts as the bridge between MCP and local Chrome APIs.
+ * 
+ * RULES / REGELN:
+ * 1. EXTENSIVE LOGGING: Every function call must be traceable.
+ * 2. NO ASSUMPTIONS: Validate all inputs and external states.
+ * 3. SECURITY FIRST: Never leak credentials or session data.
+ * 
+ * CONSEQUENCES / KONSEQUENZEN:
+ * Breaking this script disables ALL browser-based agent actions.
+ * 
+ * AUTHOR: SIN-Zeus / A2A Fleet
+ * ==============================================================================
+ */
+
+
+/**
+ * ==============================================================================
+ * OpenSIN Bridge - Core Component (V4.0.0+)
+ * ==============================================================================
+ * 
+ * DESCRIPTION / BESCHREIBUNG:
+ * This file is a critical component of the OpenSIN Bridge ecosystem. 
+ * It enables direct, secure, and reliable communication between the Hugging Face 
+ * MCP Server and the user's local Chrome browser.
+ * 
+ * ARCHITECTURE / WARUM SO GEBAUT:
+ * - We DO NOT use Selenium, Puppeteer, or nodriver here.
+ * - We DO NOT launch new Chrome instances with --no-sandbox.
+ * - Instead, we use the Native Chrome Extension API (MV3) inside the user's 
+ *   DEFAULT profile to ensure all cookies, sessions, and extensions remain intact.
+ * 
+ * RULES / REGELN FÜR DIESEN CODE:
+ * 1. NO ASSUMPTIONS: Do not assume a tab or window exists. Always verify and handle missing states.
+ * 2. EXTENSIVE LOGGING: Every action must be logged. Silent failures are prohibited.
+ * 3. FALLBACKS: If an API fails (e.g. tabs.create without a window), fallback gracefully (e.g. create a window).
+ * 
+ * CONSEQUENCES / KONSEQUENZEN WENN GEÄNDERT:
+ * - If you break the WebSocket connection here, the entire autonomous agent fleet goes blind.
+ * - If you change security policies (CSP), the extension might get banned by Chrome.
+ * 
+ * AUTHOR: SIN-Zeus / A2A Team
+ * ==============================================================================
+ */
+
+import {
+  OBSERVATION_DEFAULTS,
+  buildDomDiff,
+  buildVisualDiff,
+  evaluateObservation,
+  summarizeProof,
+} from './observation-runtime.mjs';
+
+import {
+  NATIVE_HOST_CONTEXT,
+  NATIVE_HOST_IDLE_TIMEOUT_MS,
+  NATIVE_HOST_NAME,
+  NATIVE_HOST_REQUEST_TIMEOUT_MS,
+  assertNativeCommandAllowed,
+  buildWorkflowStartPayload,
+  createNativeEnvelope,
+} from './native-host.mjs';
+
+// Shared deterministic primitive helpers are loaded as a side-effect module so
+// the exact same bounded rule set can be reused by the service worker, content
+// scripts, and Node-based tests without introducing bundling into this repo.
+import '../shared/deterministic-primitives.js';
+
+// The helper stays nullable on purpose. If it is ever unavailable we must keep
+// the existing adaptive paths working instead of failing closed.
+const deterministicPrimitives = globalThis.__OpenSINDeterministicPrimitives || null;
+
 let offscreenReady = false;
-const VERSION = '4.0.0';
+const VERSION = chrome.runtime.getManifest().version;
 const HF_MCP_URL = 'wss://openjerro-opensin-bridge-mcp.hf.space';
 const TOOL_REGISTRY = {};
 let hfWs = null;
 let hfReconnectTimer = null;
 let hfReconnectAttempts = 0;
-const HF_MAX_RECONNECT = 10;
-const HF_RECONNECT_DELAY = 3000;
+const HF_MAX_RECONNECT = Infinity;
+const HF_RECONNECT_DELAY = 1000;
 let recentLogs = [];
 const MAX_LOGS = 50;
+
+// ============================================================
+// ISSUE #28: MV3 Keep-Alive — Ephemeral State via storage.session
+// ============================================================
+// WHY: Chrome MV3 service workers are killed after ~30s inactivity.
+// All in-memory Maps (CURRENT_TAB_ID, active sessions, ref map) are wiped.
+// chrome.storage.session survives SW restarts AND is faster than storage.local.
+// USAGE: call persistEphemeralState() after mutating critical runtime state.
+// Call restoreEphemeralState() during init to recover from a SW restart.
+
+async function persistEphemeralState(patch = {}) {
+  try {
+    const current = await chrome.storage.session.get(['_sin_sw_state']);
+    const prev = current['_sin_sw_state'] || {};
+    await chrome.storage.session.set({ '_sin_sw_state': { ...prev, ...patch, ts: Date.now() } });
+  } catch (e) {
+    log('warn', `persistEphemeralState failed: ${e.message}`);
+  }
+}
+
+async function restoreEphemeralState() {
+  try {
+    const data = await chrome.storage.session.get(['_sin_sw_state']);
+    const state = data['_sin_sw_state'];
+    if (state) {
+      log('info', `Restored ephemeral SW state from storage.session (age: ${Date.now() - state.ts}ms)`);
+    }
+    return state || {};
+  } catch (e) {
+    log('warn', `restoreEphemeralState failed: ${e.message}`);
+    return {};
+  }
+}
+
+// ============================================================
+// ISSUE #29: MAIN-World postMessage Security Schema Validation
+// ============================================================
+// WHY: MAIN-world injected scripts run in the page's JS context.
+// Hostile pages can send crafted postMessage events that mimic our schema.
+// RULE: ONLY accept messages with a known _sinBridgeType from our own origin.
+// Every handler for window.postMessage MUST call this validator first.
+
+const ALLOWED_MAIN_WORLD_MSG_TYPES = new Set([
+  'NETWORK_EVENT',      // fetch/XHR correlation from MAIN-world interceptor
+  'BEHAVIOR_EVENT',     // user interaction timeline event from MAIN-world capture
+  'SNAPSHOT_REQUEST',   // snapshot trigger from in-page script
+]);
+
+function validateMainWorldMessage(event) {
+  if (!event || typeof event !== 'object') return null;
+  const data = event.data;
+  if (!data || typeof data !== 'object') return null;
+  if (!ALLOWED_MAIN_WORLD_MSG_TYPES.has(data._sinBridgeType)) return null;
+  if (typeof data.payload !== 'object' || data.payload === null) return null;
+  return data;
+}
+
 
 function addLog(level, msg) {
   const entry = { level, msg, timestamp: new Date().toISOString() };
@@ -22,6 +159,172 @@ function log(level, msg, data) {
   const fn = console[level] || console.log;
   data ? fn(`${prefix} ${msg}`, data) : fn(`${prefix} ${msg}`);
   addLog(level, msg);
+}
+
+// --- Native Messaging Host State ---
+// WHAT: Tracks the lifecycle of the MV3 native messaging port.
+// WHY: connectNative() keeps the service worker alive, so we keep the port scoped
+// to explicit authenticated-session workflows and tear it down after inactivity.
+let nativePort = null;
+let nativeIdleTimer = null;
+let nativeRequestSequence = 0;
+let nativeWorkflowSession = null;
+const nativePendingRequests = new Map();
+const nativeState = {
+  connected: false,
+  connectedAt: null,
+  lastActivityAt: null,
+  lastDisconnectReason: null,
+  lastError: null,
+};
+
+function clearNativeIdleTimer() {
+  if (nativeIdleTimer) {
+    clearTimeout(nativeIdleTimer);
+    nativeIdleTimer = null;
+  }
+}
+
+function updateNativeActivity(reason = 'activity') {
+  nativeState.lastActivityAt = Date.now();
+  clearNativeIdleTimer();
+  nativeIdleTimer = setTimeout(() => {
+    log('info', `Native host idle timeout reached after ${NATIVE_HOST_IDLE_TIMEOUT_MS}ms`);
+    disconnectNativePort(`idle-timeout:${reason}`);
+  }, NATIVE_HOST_IDLE_TIMEOUT_MS);
+}
+
+function rejectAllNativePendingRequests(message) {
+  for (const [requestId, pending] of nativePendingRequests.entries()) {
+    clearTimeout(pending.timeoutId);
+    pending.reject(new Error(message));
+    nativePendingRequests.delete(requestId);
+  }
+}
+
+function handleNativeMessage(message) {
+  nativeState.lastError = null;
+  updateNativeActivity('response');
+
+  if (!message || typeof message !== 'object') {
+    log('warn', 'Native host returned a non-object response', message);
+    return;
+  }
+
+  const requestId = message.requestId;
+  if (!requestId || !nativePendingRequests.has(requestId)) {
+    log('warn', `Native host response has no pending request: ${requestId || 'missing requestId'}`, message);
+    return;
+  }
+
+  const pending = nativePendingRequests.get(requestId);
+  nativePendingRequests.delete(requestId);
+  clearTimeout(pending.timeoutId);
+
+  if (message.ok === false) {
+    const errorMessage = message.error?.message || 'Native host request failed';
+    pending.reject(new Error(errorMessage));
+    return;
+  }
+
+  pending.resolve(message.payload || {});
+}
+
+function disconnectNativePort(reason = 'manual-disconnect') {
+  clearNativeIdleTimer();
+
+  if (nativePort) {
+    try {
+      nativePort.disconnect();
+    } catch (error) {
+      log('warn', `Native host disconnect raised: ${error.message}`);
+    }
+  }
+
+  nativePort = null;
+  nativeWorkflowSession = null;
+  nativeState.connected = false;
+  nativeState.connectedAt = null;
+  nativeState.lastDisconnectReason = reason;
+  rejectAllNativePendingRequests(`Native host disconnected: ${reason}`);
+  log('info', `Native host disconnected (${reason})`);
+}
+
+function ensureNativePort() {
+  if (nativePort) {
+    updateNativeActivity('reuse-port');
+    return nativePort;
+  }
+
+  log('info', `Connecting to native host ${NATIVE_HOST_NAME}`);
+  nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+  nativeState.connected = true;
+  nativeState.connectedAt = Date.now();
+  nativeState.lastActivityAt = Date.now();
+  nativeState.lastDisconnectReason = null;
+  nativeState.lastError = null;
+
+  nativePort.onMessage.addListener(handleNativeMessage);
+  nativePort.onDisconnect.addListener(() => {
+    const runtimeError = chrome.runtime.lastError?.message || null;
+    if (runtimeError) {
+      nativeState.lastError = runtimeError;
+      log('warn', `Native host disconnected with runtime error: ${runtimeError}`);
+    }
+    disconnectNativePort(runtimeError || 'native-port-closed');
+  });
+
+  updateNativeActivity('connect-port');
+  return nativePort;
+}
+
+function buildNativeRequestId() {
+  nativeRequestSequence += 1;
+  return `native-${Date.now()}-${nativeRequestSequence}`;
+}
+
+function nativeHostRequest(command, payload = {}, meta = {}) {
+  assertNativeCommandAllowed(command);
+  const requestId = buildNativeRequestId();
+  const envelope = createNativeEnvelope({ command, payload, requestId, meta });
+  const port = ensureNativePort();
+  updateNativeActivity(command);
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      nativePendingRequests.delete(requestId);
+      reject(new Error(`Native host request timed out: ${command}`));
+    }, NATIVE_HOST_REQUEST_TIMEOUT_MS);
+
+    nativePendingRequests.set(requestId, { resolve, reject, timeoutId });
+
+    try {
+      port.postMessage(envelope);
+    } catch (error) {
+      clearTimeout(timeoutId);
+      nativePendingRequests.delete(requestId);
+      reject(error);
+    }
+  });
+}
+
+async function buildCookieHeader(url) {
+  const cookies = await chrome.cookies.getAll({ url });
+  return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
+}
+
+async function maybeAugmentHeadersForNativeFetch({ url, headers = {}, includeCookies = true }) {
+  const normalizedHeaders = { ...headers };
+  normalizedHeaders['x-opensin-transport'] = 'native-host';
+
+  if (includeCookies && !normalizedHeaders.Cookie && !normalizedHeaders.cookie) {
+    const cookieHeader = await buildCookieHeader(url);
+    if (cookieHeader) {
+      normalizedHeaders.Cookie = cookieHeader;
+    }
+  }
+
+  return normalizedHeaders;
 }
 
 function connectToHfMcp() {
@@ -64,7 +367,7 @@ function connectToHfMcp() {
       hfWs = null;
       if (hfReconnectAttempts < HF_MAX_RECONNECT) {
         hfReconnectAttempts++;
-        const delay = Math.min(HF_RECONNECT_DELAY * Math.pow(2, hfReconnectAttempts - 1), 60000);
+        const delay = HF_RECONNECT_DELAY;
         log('info', `Reconnecting in ${delay}ms (attempt ${hfReconnectAttempts}/${HF_MAX_RECONNECT})`);
         hfReconnectTimer = setTimeout(connectToHfMcp, delay);
       } else {
@@ -93,6 +396,8 @@ const _cdpAttached = new Set();
 const _refMap = new Map(); // refId -> { tabId, backendDOMNodeId, nodeId, role, name }
 let _lastSnapshot = null;
 let _refCounter = 0;
+const _interactionProofs = new Map();
+let _interactionProofCounter = 0;
 
 async function cdpEnsureAttached(tabId) {
   if (_cdpAttached.has(tabId)) return;
@@ -100,6 +405,7 @@ async function cdpEnsureAttached(tabId) {
   _cdpAttached.add(tabId);
   await chrome.debugger.sendCommand({ tabId }, 'Accessibility.enable', {});
   await chrome.debugger.sendCommand({ tabId }, 'DOM.enable', {});
+  await chrome.debugger.sendCommand({ tabId }, 'Page.enable', {});
   log('info', `CDP attached to tab ${tabId}`);
 }
 
@@ -115,8 +421,139 @@ async function cdpSend(tabId, method, params) {
   return chrome.debugger.sendCommand({ tabId }, method, params || {});
 }
 
+// POINTER STATE TRACKING: Keeps the last known pointer position per tab.
+// WHY: Without a remembered cursor position, every movement would start from a
+// random location near the target and still look synthetic over time.
+const _pointerState = new Map();
+
+// HUMAN ENTROPY HELPERS -----------------------------------------------------
+// These helpers centralize all CDP pointer movement so that every click/hover
+// path uses the same non-deterministic timing, travel, and coordinate jitter.
+function humanEntropyFloat(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+function humanEntropyInt(min, max) {
+  return Math.round(humanEntropyFloat(min, max));
+}
+
+function humanEntropyClamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+async function humanEntropySleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function humanEntropyPointFromBorder(border, maxJitterPx = 5) {
+  // WHAT: Derives a target point from the DOM box model instead of clicking the
+  // exact geometric center every time.
+  // WHY: Perfect center hits are a strong anti-bot signal, especially when they
+  // repeat across consecutive interactions.
+  const xs = [border[0], border[2], border[4], border[6]];
+  const ys = [border[1], border[3], border[5], border[7]];
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
+  const centerX = minX + width / 2;
+  const centerY = minY + height / 2;
+  const jitterX = Math.min(maxJitterPx, Math.max(1, width / 4));
+  const jitterY = Math.min(maxJitterPx, Math.max(1, height / 4));
+
+  return {
+    x: Math.round(humanEntropyClamp(centerX + humanEntropyFloat(-jitterX, jitterX), minX + 1, maxX - 1)),
+    y: Math.round(humanEntropyClamp(centerY + humanEntropyFloat(-jitterY, jitterY), minY + 1, maxY - 1)),
+    bounds: { minX, maxX, minY, maxY },
+  };
+}
+
+function humanEntropyPointerStart(tabId, targetPoint) {
+  // WHAT: Starts from the last pointer location when available, otherwise from
+  // a nearby approach vector.
+  // WHY: Humans usually continue from their previous cursor position rather than
+  // teleporting into place for each action.
+  const lastPointer = _pointerState.get(tabId);
+  if (lastPointer) {
+    return { x: lastPointer.x, y: lastPointer.y };
+  }
+
+  return {
+    x: Math.round(targetPoint.x + humanEntropyFloat(-36, 36)),
+    y: Math.round(targetPoint.y + humanEntropyFloat(-24, 24)),
+  };
+}
+
+async function humanEntropyMovePointerCdp(tabId, targetPoint, bounds) {
+  // WHAT: Emits a short approach path with diminishing jitter instead of a
+  // single teleport-like mouseMoved event.
+  // WHY: Anti-bot systems correlate motion trajectories and per-step timing.
+  const start = humanEntropyPointerStart(tabId, targetPoint);
+  const steps = humanEntropyInt(2, 4);
+
+  for (let step = 1; step <= steps; step += 1) {
+    const progress = step / steps;
+    const remainingNoise = 2.5 * (1 - progress);
+    const x = Math.round(start.x + ((targetPoint.x - start.x) * progress) + humanEntropyFloat(-remainingNoise, remainingNoise));
+    const y = Math.round(start.y + ((targetPoint.y - start.y) * progress) + humanEntropyFloat(-remainingNoise, remainingNoise));
+    const point = {
+      x: humanEntropyClamp(x, Math.min(bounds.minX, start.x) - 48, Math.max(bounds.maxX, start.x) + 48),
+      y: humanEntropyClamp(y, Math.min(bounds.minY, start.y) - 48, Math.max(bounds.maxY, start.y) + 48),
+    };
+
+    await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: point.x,
+      y: point.y,
+    });
+    _pointerState.set(tabId, point);
+    await humanEntropySleep(humanEntropyInt(12, 32));
+  }
+
+  const settledPoint = { x: targetPoint.x, y: targetPoint.y };
+  _pointerState.set(tabId, settledPoint);
+  return settledPoint;
+}
+
+async function humanEntropyHoverCdp(tabId, pointerTarget) {
+  const settledPoint = await humanEntropyMovePointerCdp(tabId, pointerTarget, pointerTarget.bounds);
+  await humanEntropySleep(humanEntropyInt(80, 180));
+  return settledPoint;
+}
+
+async function humanEntropyClickCdp(tabId, pointerTarget) {
+  const settledPoint = await humanEntropyMovePointerCdp(tabId, pointerTarget, pointerTarget.bounds);
+
+  // WHY: Humans pause briefly after arrival before committing to a click.
+  await humanEntropySleep(humanEntropyInt(24, 78));
+  await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: settledPoint.x,
+    y: settledPoint.y,
+    button: 'left',
+    clickCount: 1,
+  });
+
+  // WHY: A non-zero hold time avoids the "instant press/release" signature.
+  await humanEntropySleep(humanEntropyInt(55, 160));
+  await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: settledPoint.x,
+    y: settledPoint.y,
+    button: 'left',
+    clickCount: 1,
+  });
+
+  // WHY: The post-release pause makes chained interactions less robotic.
+  await humanEntropySleep(humanEntropyInt(18, 65));
+  return settledPoint;
+}
+
 // Clean up when tab closes
 chrome.tabs.onRemoved.addListener((tabId) => {
+  _pointerState.delete(tabId);
   if (_cdpAttached.has(tabId)) {
     _cdpAttached.delete(tabId);
     // Clear refs for this tab
@@ -129,6 +566,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // Clean up on debugger detach (e.g. user closes DevTools bar)
 chrome.debugger.onDetach.addListener((source) => {
   if (source.tabId) {
+    _pointerState.delete(source.tabId);
     _cdpAttached.delete(source.tabId);
     for (const [key, val] of _refMap.entries()) {
       if (val.tabId === source.tabId) _refMap.delete(key);
@@ -138,19 +576,101 @@ chrome.debugger.onDetach.addListener((source) => {
 });
 
 // --- Tabs ---
+async function ensureWindowExists(options = {}) {
+  const windows = await chrome.windows.getAll({ populate: true });
+  if (windows.length > 0) return { created: false, window: windows[0] };
+
+  const createData = {};
+  if (options.url) createData.url = options.url;
+  if (options.focused !== undefined) createData.focused = !!options.focused;
+  if (options.incognito !== undefined) createData.incognito = !!options.incognito;
+  if (options.type) createData.type = options.type;
+  if (options.state) createData.state = options.state;
+
+  const window = await chrome.windows.create(createData.url ? createData : { ...createData, url: 'about:blank' });
+  if (!window.tabs) {
+    window.tabs = await chrome.tabs.query({ windowId: window.id });
+  }
+  return { created: true, window };
+}
+
+// TOOL REGISTRATION: tabs_list
+// WHAT: Registers the tabs_list tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('tabs_list', async (p) => { const tabs = await chrome.tabs.query(p?.query || {}); return { tabs: tabs.map(t => ({ id: t.id, title: t.title, url: t.url, active: t.active, favIconUrl: t.favIconUrl })) }; });
+// TOOL REGISTRATION: windows_create
+// WHAT: Registers the windows_create tool for the MCP Server.
+// WHY: Agents use this to control the browser.
+reg('windows_create', async (p = {}) => {
+  if (p.url && !isSafeUrl(p.url)) return { error: 'Blocked URL scheme' };
+  const ensured = await ensureWindowExists(p);
+  const tab = ensured.window.tabs?.[0];
+  return {
+    created: ensured.created,
+    windowId: ensured.window.id,
+    tabId: tab?.id,
+    url: tab?.url || p.url || 'about:blank',
+    focused: ensured.window.focused,
+  };
+});
+// TOOL REGISTRATION: tabs_create
+// WHAT: Registers the tabs_create tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('tabs_create', async (p) => {
   if (!isSafeUrl(p.url)) return { error: 'Blocked URL scheme' };
-  const tab = await chrome.tabs.create({ url: p.url, active: p.active !== false }); return { tabId: tab.id, url: tab.url };
+
+  const createProps = { url: p.url, active: p.active !== false };
+  if (p.windowId !== undefined) createProps.windowId = p.windowId;
+
+  const windows = await chrome.windows.getAll({ populate: false });
+  if (windows.length === 0) {
+    const ensured = await ensureWindowExists({ url: p.url, focused: p.active !== false });
+    const tab = ensured.window.tabs?.[0];
+    return {
+      tabId: tab?.id,
+      url: tab?.url || p.url,
+      windowId: ensured.window.id,
+      createdWindow: true,
+    };
+  }
+
+  try {
+    const tab = await chrome.tabs.create(createProps);
+    return { tabId: tab.id, url: tab.url, windowId: tab.windowId, createdWindow: false };
+  } catch (error) {
+    if (error?.message?.includes('No current window')) {
+      const ensured = await ensureWindowExists({ url: p.url, focused: p.active !== false });
+      const tab = ensured.window.tabs?.[0];
+      return {
+        tabId: tab?.id,
+        url: tab?.url || p.url,
+        windowId: ensured.window.id,
+        createdWindow: true,
+      };
+    }
+    throw error;
+  }
 });
+// TOOL REGISTRATION: tabs_update
+// WHAT: Registers the tabs_update tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('tabs_update', async (p) => {
   if (p.url && !isSafeUrl(p.url)) return { error: 'Blocked URL scheme' };
   const tab = await chrome.tabs.update(p.tabId, { url: p.url, active: p.active }); return { tabId: tab.id, url: tab.url };
 });
+// TOOL REGISTRATION: tabs_close
+// WHAT: Registers the tabs_close tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('tabs_close', async (p) => { await chrome.tabs.remove(p.tabId); return { closed: true, tabId: p.tabId }; });
+// TOOL REGISTRATION: tabs_activate
+// WHAT: Registers the tabs_activate tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('tabs_activate', async (p) => { await chrome.tabs.update(p.tabId, { active: true }); return { activated: true, tabId: p.tabId }; });
 
 // --- Navigation (Single Tab Mode) ---
+// TOOL REGISTRATION: navigate
+// WHAT: Registers the navigate tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('navigate', async (p) => {
   if (!isSafeUrl(p.url)) return { error: 'Blocked URL scheme' };
   const domain = new URL(p.url).hostname;
@@ -163,8 +683,17 @@ reg('navigate', async (p) => {
   const tab = await chrome.tabs.create({ url: p.url });
   return { tabId: tab.id, url: tab.url, reused: false };
 });
+// TOOL REGISTRATION: go_back
+// WHAT: Registers the go_back tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('go_back', async (p) => { await chrome.tabs.goBack(p.tabId); return { success: true }; });
+// TOOL REGISTRATION: go_forward
+// WHAT: Registers the go_forward tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('go_forward', async (p) => { await chrome.tabs.goForward(p.tabId); return { success: true }; });
+// TOOL REGISTRATION: reload
+// WHAT: Registers the reload tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('reload', async (p) => { await chrome.tabs.reload(p.tabId, { bypassCache: p.bypassCache }); return { success: true }; });
 
 // --- Helper for safe script execution using FUNC ---
@@ -187,11 +716,224 @@ async function safeExecute(tabId, func, args = []) {
   }
 }
 
-// --- Script Execution (Disabled for code strings due to CSP, use specific tools) ---
-reg('execute_script', async (p) => {
-  return { error: 'execute_script with code string is disabled. Use specific tools like click_element, type_text, etc.' };
+async function runHumanEntropyDomInteraction(task) {
+  // IMPORTANT: This function executes inside the page context via
+  // chrome.scripting.executeScript. It therefore keeps all helper logic inside
+  // its own body instead of referencing outer service-worker scope.
+  const randomBetween = (min, max) => min + Math.random() * (max - min);
+  const randomInt = (min, max) => Math.round(randomBetween(min, max));
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+  const buildPointFromRect = (rect, maxJitterPx = 5) => {
+    const width = Math.max(1, rect.width || 1);
+    const height = Math.max(1, rect.height || 1);
+    const centerX = rect.left + width / 2;
+    const centerY = rect.top + height / 2;
+    const jitterX = Math.min(maxJitterPx, Math.max(1, width / 4));
+    const jitterY = Math.min(maxJitterPx, Math.max(1, height / 4));
+    return {
+      x: Math.round(clamp(centerX + randomBetween(-jitterX, jitterX), rect.left + 1, rect.right - 1)),
+      y: Math.round(clamp(centerY + randomBetween(-jitterY, jitterY), rect.top + 1, rect.bottom - 1)),
+    };
+  };
+
+  const dispatchMouse = (eventTarget, type, point, extra = {}) => {
+    eventTarget.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: point.x,
+      clientY: point.y,
+      screenX: window.screenX + point.x,
+      screenY: window.screenY + point.y,
+      button: extra.button ?? 0,
+      buttons: extra.buttons ?? 0,
+      detail: extra.detail ?? 1,
+      ...extra,
+    }));
+  };
+
+  const ensureRect = (target, explicitRect) => {
+    const rect = explicitRect || target?.getBoundingClientRect?.();
+    if (!rect) return null;
+    if ((rect.width || 0) <= 0 || (rect.height || 0) <= 0) return null;
+    return rect;
+  };
+
+  const findInShadow = (root, selector) => {
+    const direct = root.querySelector?.(selector);
+    if (direct) return direct;
+    for (const child of root.children || []) {
+      if (child.shadowRoot) {
+        const nested = findInShadow(child.shadowRoot, selector);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  };
+
+  const focusIfPossible = (target) => {
+    try {
+      target.focus?.({ preventScroll: true });
+    } catch (_error) {
+      target.focus?.();
+    }
+  };
+
+  const maybeCallNativeClick = (target) => {
+    if (typeof target.click === 'function') {
+      target.click();
+    } else {
+      target.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      }));
+    }
+  };
+
+  const movePointerWithEntropy = async (eventTarget, rect) => {
+    const destination = buildPointFromRect(rect, 5);
+    const start = {
+      x: Math.round(destination.x + randomBetween(-32, 32)),
+      y: Math.round(destination.y + randomBetween(-20, 20)),
+    };
+    const steps = randomInt(2, 4);
+
+    for (let step = 1; step <= steps; step += 1) {
+      const progress = step / steps;
+      const residualNoise = 2 * (1 - progress);
+      const point = {
+        x: Math.round(start.x + ((destination.x - start.x) * progress) + randomBetween(-residualNoise, residualNoise)),
+        y: Math.round(start.y + ((destination.y - start.y) * progress) + randomBetween(-residualNoise, residualNoise)),
+      };
+      dispatchMouse(eventTarget, 'mousemove', point, { buttons: 0 });
+      await sleep(randomInt(12, 28));
+    }
+
+    return destination;
+  };
+
+  const performHumanClick = async ({ eventTarget, clickTarget, rect, dispatchOnly = false }) => {
+    const usableRect = ensureRect(clickTarget || eventTarget, rect);
+    if (!usableRect) return null;
+
+    const targetPoint = await movePointerWithEntropy(eventTarget, usableRect);
+    dispatchMouse(eventTarget, 'mouseover', targetPoint, { buttons: 0 });
+    await sleep(randomInt(24, 72));
+
+    focusIfPossible(clickTarget || eventTarget);
+    dispatchMouse(eventTarget, 'mousedown', targetPoint, { button: 0, buttons: 1, detail: 1 });
+    await sleep(randomInt(55, 150));
+    dispatchMouse(eventTarget, 'mouseup', targetPoint, { button: 0, buttons: 0, detail: 1 });
+    await sleep(randomInt(18, 60));
+
+    if (dispatchOnly) {
+      dispatchMouse(eventTarget, 'click', targetPoint, { button: 0, buttons: 0, detail: 1 });
+    } else {
+      maybeCallNativeClick(clickTarget || eventTarget);
+    }
+
+    return targetPoint;
+  };
+
+  switch (task.kind) {
+    case 'selector-click': {
+      const element = document.querySelector(task.selector);
+      if (!element) return { found: false };
+      const point = await performHumanClick({ eventTarget: element, clickTarget: element, rect: element.getBoundingClientRect() });
+      return { found: true, tag: element.tagName, position: point };
+    }
+
+    case 'shadow-click': {
+      const element = findInShadow(document, task.selector) || document.querySelector(task.selector);
+      if (!element) return { clicked: false, reason: 'Element not found' };
+      const point = await performHumanClick({ eventTarget: element, clickTarget: element, rect: element.getBoundingClientRect() });
+      return { clicked: true, tag: element.tagName, inShadowRoot: !!element.getRootNode?.()?.host, position: point };
+    }
+
+    case 'iframe-click': {
+      const iframe = document.querySelector(task.iframeSelector);
+      if (!iframe) return { error: 'Iframe not found' };
+
+      try {
+        const doc = iframe.contentDocument || iframe.contentWindow.document;
+        if (!doc) return { error: 'Cross-origin iframe — cannot access content' };
+        const target = doc.querySelector(task.innerSelector);
+        if (!target) return { error: `Element "${task.innerSelector}" not found in iframe` };
+        const point = await performHumanClick({ eventTarget: target, clickTarget: target, rect: target.getBoundingClientRect() });
+        return { success: true, action: 'click', tag: target.tagName, position: point };
+      } catch (error) {
+        return { error: `Access denied: ${error.message}` };
+      }
+    }
+
+    case 'turnstile-click': {
+      const button = document.querySelector('input[type="checkbox"]') || document.querySelector('[role="checkbox"]');
+      if (!button) return { solved: false, reason: 'No clickable element found' };
+      const point = await performHumanClick({ eventTarget: button, clickTarget: button, rect: button.getBoundingClientRect() });
+      return { solved: true, method: 'checkbox_click', position: point };
+    }
+
+    case 'recaptcha-click': {
+      const iframe = document.querySelector('iframe[src*="google.com/recaptcha/api2/bframe"]');
+      if (!iframe) return { solved: false, reason: 'No reCAPTCHA iframe found' };
+
+      try {
+        const checkbox = iframe.contentDocument?.querySelector('.recaptcha-checkbox');
+        if (checkbox) {
+          const point = await performHumanClick({ eventTarget: checkbox, clickTarget: checkbox, rect: checkbox.getBoundingClientRect() });
+          return { solved: true, method: 'direct_click', position: point };
+        }
+      } catch (_error) {
+        // Cross-origin access is expected on many CAPTCHA surfaces, so the code
+        // falls through to a coordinate-based document dispatch below.
+      }
+
+      const rect = iframe.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return { solved: false, reason: 'Could not access checkbox' };
+      const point = await performHumanClick({ eventTarget: document, clickTarget: document, rect, dispatchOnly: true });
+      return { solved: true, method: 'coordinate_click', x: point.x, y: point.y, position: point };
+    }
+
+    default:
+      return { error: `Unsupported interaction kind: ${task.kind}` };
+  }
+}
+
+// TOOL REGISTRATION: execute_javascript
+// WHAT: Registers the execute_javascript tool for the MCP Server.
+// WHY: Agents use this to control the browser.
+reg('execute_javascript', async (p) => {
+  if (!p.script || typeof p.script !== 'string') return { error: 'script must be a string' };
+  const tabId = p.tabId || await activeTabId();
+  try {
+    const { result, exceptionDetails } = await cdpSend(tabId, 'Runtime.evaluate', {
+      expression: p.script,
+      returnByValue: true,
+      awaitPromise: true,
+      userGesture: true
+    });
+    if (exceptionDetails) {
+      return { error: exceptionDetails.exception?.description || exceptionDetails.text };
+    }
+    return { success: true, result: result.value };
+  } catch(e) {
+    return { error: `CDP Evaluate failed: ${e.message}` };
+  }
 });
 
+// TOOL REGISTRATION: execute_script
+// WHAT: Registers the execute_script tool for the MCP Server.
+// WHY: Agents use this to control the browser.
+reg('execute_script', async (p) => {
+  return { error: 'execute_script with code string is disabled. Use execute_javascript instead.' };
+});
+
+// TOOL REGISTRATION: inject_css
+// WHAT: Registers the inject_css tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('inject_css', async (p) => {
   if (!p.css || typeof p.css !== 'string') return { error: 'css must be a non-empty string' };
   if (p.css.length > 50000) return { error: 'css exceeds maximum length of 50000 characters' };
@@ -200,19 +942,18 @@ reg('inject_css', async (p) => {
 });
 
 // --- DOM Interaction ---
+// TOOL REGISTRATION: click_element
+// WHAT: Registers the click_element tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('click_element', async (p) => {
   if (!p.selector || typeof p.selector !== 'string' || p.selector.trim() === '') return { error: 'selector must be a non-empty string' };
   const tabId = p.tabId || await activeTabId();
-  return safeExecute(tabId, (sel) => {
-    const el = document.querySelector(sel);
-    if (!el) return { found: false };
-    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    el.click();
-    return { found: true, tag: el.tagName };
-  }, [p.selector]);
+  return safeExecute(tabId, runHumanEntropyDomInteraction, [{ kind: 'selector-click', selector: p.selector }]);
 });
 
+// TOOL REGISTRATION: type_text
+// WHAT: Registers the type_text tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('type_text', async (p) => {
   if (!p.selector || typeof p.selector !== 'string' || p.selector.trim() === '') return { error: 'selector must be a non-empty string' };
   if (p.text !== undefined && typeof p.text !== 'string') return { error: 'text must be a string' };
@@ -229,11 +970,17 @@ reg('type_text', async (p) => {
   }, [p.selector, p.text, p.clear !== false]);
 });
 
+// TOOL REGISTRATION: get_text
+// WHAT: Registers the get_text tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('get_text', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, (sel) => document.querySelector(sel)?.textContent || '', [p.selector || 'body']);
 });
 
+// TOOL REGISTRATION: get_html
+// WHAT: Registers the get_html tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('get_html', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, (sel) => {
@@ -242,11 +989,17 @@ reg('get_html', async (p) => {
   }, [p.selector || null]);
 });
 
+// TOOL REGISTRATION: get_attribute
+// WHAT: Registers the get_attribute tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('get_attribute', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, (sel, attr) => document.querySelector(sel)?.getAttribute(attr) || null, [p.selector, p.attribute]);
 });
 
+// TOOL REGISTRATION: wait_for_element
+// WHAT: Registers the wait_for_element tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('wait_for_element', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, (sel, timeout) => new Promise((resolve) => {
@@ -262,16 +1015,25 @@ reg('wait_for_element', async (p) => {
 });
 
 // --- Page Info ---
+// TOOL REGISTRATION: get_page_info
+// WHAT: Registers the get_page_info tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('get_page_info', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => ({ title: document.title, url: window.location.href, readyState: document.readyState }));
 });
 
+// TOOL REGISTRATION: get_all_links
+// WHAT: Registers the get_all_links tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('get_all_links', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => Array.from(document.querySelectorAll('a[href]')).map(a => ({ href: a.href, text: (a.textContent || '').trim().slice(0, 50), visible: a.offsetParent !== null })));
 });
 
+// TOOL REGISTRATION: get_all_inputs
+// WHAT: Registers the get_all_inputs tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('get_all_inputs', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => Array.from(document.querySelectorAll('input, textarea, select')).map(el => ({ tag: el.tagName.toLowerCase(), type: el.type, name: el.name, id: el.id, placeholder: el.placeholder, value: el.value, visible: el.offsetParent !== null })));
@@ -325,13 +1087,22 @@ function doExtractStudies() {
   return { studies, count: studies.length, showing: showingMatch ? `${showingMatch[1]}/${showingMatch[2]}` : null };
 }
 
+// TOOL REGISTRATION: extract_prolific_studies
+// WHAT: Registers the extract_prolific_studies tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('extract_prolific_studies', async (p) => {
   const tabId = p?.tabId || await activeTabId();
   return safeExecute(tabId, doExtractStudies);
 });
 
 // --- Screenshot ---
+// TOOL REGISTRATION: screenshot
+// WHAT: Registers the screenshot tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('screenshot', async (p) => { const dataUrl = await chrome.tabs.captureVisibleTab(p.windowId, { format: p.format || 'jpeg', quality: p.quality || 80 }); return { dataUrl: dataUrl.substring(0, 100) + '...', length: dataUrl.length }; });
+// TOOL REGISTRATION: screenshot_full
+// WHAT: Registers the screenshot_full tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('screenshot_full', async (p) => { const dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format: 'png' }); return { dataUrl }; });
 
 // --- Video Recording ---
@@ -339,6 +1110,9 @@ let mediaRecorder = null;
 let recordedChunks = [];
 let recordingTabId = null;
 
+// TOOL REGISTRATION: start_recording
+// WHAT: Registers the start_recording tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('start_recording', async (p) => {
   const tabId = p.tabId || await activeTabId();
   try {
@@ -356,6 +1130,9 @@ reg('start_recording', async (p) => {
   }
 });
 
+// TOOL REGISTRATION: stop_recording
+// WHAT: Registers the stop_recording tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('stop_recording', async () => {
   return new Promise((resolve) => {
     if (!mediaRecorder || mediaRecorder.state === 'inactive') {
@@ -378,14 +1155,82 @@ reg('stop_recording', async () => {
   });
 });
 
+// TOOL REGISTRATION: recording_status
+// WHAT: Registers the recording_status tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('recording_status', async () => ({
   active: mediaRecorder && mediaRecorder.state === 'recording',
   state: mediaRecorder?.state || 'inactive',
   tabId: recordingTabId,
 }));
 
-// --- Cookies ---
-reg('get_cookies', async (p) => { const cookies = await chrome.cookies.getAll({ url: p.url || undefined, domain: p.domain || undefined }); return { count: cookies.length, cookies }; });
+// ============================================================
+// ISSUE #20: Privacy, Consent, and Redaction for Behavior Recording
+// ============================================================
+// Behavior recording MUST be explicitly enabled by the user (consent-gate).
+// Sensitive input values (passwords, credit cards) are ALWAYS redacted.
+// The recording scope is tracked and visible to the user via the popup.
+// WHY: A full-fidelity recorder that runs without consent is a surveillance tool.
+
+let behaviorRecordingEnabled = false;
+let behaviorRecordingScope = null;
+
+const SENSITIVE_INPUT_TYPES = new Set(['password', 'credit-card', 'card-number', 'cvv', 'ssn', 'pin']);
+const SENSITIVE_FIELD_PATTERNS = /password|passwort|secret|token|credit.?card|card.?number|cvv|ssn|social.?security|pin\b/i;
+
+function redactSensitiveValue(fieldName = '', inputType = '', value = '') {
+  if (inputType === 'password') return '[REDACTED:password]';
+  if (SENSITIVE_INPUT_TYPES.has(inputType)) return '[REDACTED:sensitive]';
+  if (SENSITIVE_FIELD_PATTERNS.test(fieldName)) return '[REDACTED:field-name]';
+  return value;
+}
+
+reg('behavior_recording_enable', async (p = {}) => {
+  behaviorRecordingEnabled = true;
+  behaviorRecordingScope = { domain: p.domain || null, tabId: p.tabId || null, startedAt: Date.now() };
+  await persistEphemeralState({ behaviorRecordingEnabled: true, behaviorRecordingScope });
+  log('info', `Behavior recording ENABLED — scope: ${JSON.stringify(behaviorRecordingScope)}`);
+  return { enabled: true, scope: behaviorRecordingScope };
+});
+
+reg('behavior_recording_disable', async () => {
+  behaviorRecordingEnabled = false;
+  behaviorRecordingScope = null;
+  await persistEphemeralState({ behaviorRecordingEnabled: false, behaviorRecordingScope: null });
+  log('info', 'Behavior recording DISABLED by user.');
+  return { enabled: false };
+});
+
+reg('behavior_recording_status', async () => ({
+  enabled: behaviorRecordingEnabled,
+  scope: behaviorRecordingScope,
+}));
+
+reg('behavior_redact_check', async (p = {}) => {
+  const redacted = redactSensitiveValue(p.fieldName || '', p.inputType || '', p.value || '');
+  return { original_length: (p.value || '').length, redacted, was_redacted: redacted !== p.value };
+});
+
+
+// TOOL REGISTRATION: get_cookies
+// WHAT: Registers the get_cookies tool for the MCP Server.
+// WHY: Agents use this to control the browser.
+reg('get_cookies', async (p = {}) => {
+  const details = {};
+  if (typeof p.url === 'string' && p.url) details.url = p.url;
+  if (typeof p.domain === 'string' && p.domain) details.domain = p.domain;
+
+  const cookies = await chrome.cookies.getAll(details);
+  return {
+    count: cookies.length,
+    cookies,
+    source: 'service_worker',
+    scope: Object.keys(details).length ? details : 'all',
+  };
+});
+// TOOL REGISTRATION: set_cookie
+// WHAT: Registers the set_cookie tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('set_cookie', async (p) => {
   if (!p.url || typeof p.url !== 'string') return { error: 'url required' };
   if (!p.name || typeof p.name !== 'string' || p.name.length > 4096) return { error: 'name must be a non-empty string ≤4096 chars' };
@@ -395,16 +1240,37 @@ reg('set_cookie', async (p) => {
   await chrome.cookies.set({ url: p.url, name: p.name, value: p.value, domain: p.domain, path: p.path || '/', secure: !!p.secure, httpOnly: !!p.httpOnly, sameSite, expirationDate: p.expirationDate || undefined });
   return { success: true, name: p.name };
 });
+// TOOL REGISTRATION: delete_cookie
+// WHAT: Registers the delete_cookie tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('delete_cookie', async (p) => { await chrome.cookies.remove({ url: p.url, name: p.name }); return { success: true, name: p.name }; });
+// TOOL REGISTRATION: clear_cookies
+// WHAT: Registers the clear_cookies tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('clear_cookies', async (p) => { const cookies = await chrome.cookies.getAll({ url: p.url }); for (const c of cookies) { const url = `http${c.secure ? 's' : ''}://${c.domain}${c.path}`; await chrome.cookies.remove({ url, name: c.name }); } return { cleared: cookies.length }; });
 
 // --- Storage ---
+// TOOL REGISTRATION: storage_get
+// WHAT: Registers the storage_get tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('storage_get', async (p) => { const data = await chrome.storage.local.get(p.keys || null); return { data }; });
+// TOOL REGISTRATION: storage_set
+// WHAT: Registers the storage_set tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('storage_set', async (p) => { await chrome.storage.local.set(p.data || {}); return { success: true }; });
+// TOOL REGISTRATION: storage_clear
+// WHAT: Registers the storage_clear tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('storage_clear', async () => { await chrome.storage.local.clear(); return { success: true }; });
 
 // --- Network ---
+// TOOL REGISTRATION: get_network_requests
+// WHAT: Registers the get_network_requests tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('get_network_requests', async (p) => ({ requests: requestLog.slice(-(p.count || 50)) }));
+// TOOL REGISTRATION: block_url
+// WHAT: Registers the block_url tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('block_url', async (p) => {
   if (!p.pattern || typeof p.pattern !== 'string' || p.pattern.trim() === '') return { error: 'pattern must be a non-empty string' };
   if (p.pattern.length > 2000) return { error: 'pattern exceeds maximum length of 2000 characters' };
@@ -412,6 +1278,9 @@ reg('block_url', async (p) => {
 });
 
 // --- Stealth Mode ---
+// TOOL REGISTRATION: enable_stealth
+// WHAT: Registers the enable_stealth tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('enable_stealth', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -432,19 +1301,147 @@ reg('enable_stealth', async (p) => {
   });
 });
 
+// TOOL REGISTRATION: stealth_status
+// WHAT: Registers the stealth_status tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('stealth_status', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => ({ webdriver: navigator.webdriver, plugins: navigator.plugins?.length || 0, languages: navigator.languages?.length || 0, chrome: !!window.chrome?.runtime, domAutomation: !!window.domAutomation }));
 });
 
 // --- Offscreen ---
+// TOOL REGISTRATION: offscreen_status
+// WHAT: Registers the offscreen_status tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('offscreen_status', async () => ({ ready: offscreenReady }));
 
+// --- Native Messaging Host ---
+// TOOL REGISTRATION: native_host_status
+// WHAT: Exposes native-host connection, workflow, and registration metadata.
+// WHY: Operators need a direct diagnostic surface before depending on the CSP fallback path.
+reg('native_host_status', async () => ({
+  hostName: NATIVE_HOST_NAME,
+  runtimeId: chrome.runtime.id,
+  allowedOrigin: `chrome-extension://${chrome.runtime.id}/`,
+  serviceWorkerStrategy: 'open port only for explicit authenticated-session workflows; close on idle timeout or explicit workflow end',
+  state: {
+    ...nativeState,
+    idleTimeoutMs: NATIVE_HOST_IDLE_TIMEOUT_MS,
+    pendingRequests: nativePendingRequests.size,
+    activeWorkflow: nativeWorkflowSession,
+  },
+}));
+
+// TOOL REGISTRATION: native_host_ping
+// WHAT: Validates that Chrome can talk to the registered native host.
+// WHY: This is the fastest integration smoke test for operator setup.
+reg('native_host_ping', async () => {
+  return nativeHostRequest('ping', {}, { source: 'service_worker' });
+});
+
+// TOOL REGISTRATION: native_host_start_workflow
+// WHAT: Opens the native port for a scoped authenticated-session workflow.
+// WHY: connectNative keeps MV3 alive, so we only enable it explicitly for flows that need the CSP bypass path.
+reg('native_host_start_workflow', async (p = {}) => {
+  const payload = buildWorkflowStartPayload({
+    workflowId: p.workflowId,
+    url: p.url,
+    tabId: p.tabId,
+    reason: p.reason || NATIVE_HOST_CONTEXT,
+  });
+  const response = await nativeHostRequest('workflow.start', payload, { source: 'service_worker' });
+  nativeWorkflowSession = {
+    workflowId: response.workflowId,
+    context: payload.context,
+    url: payload.url || null,
+    tabId: payload.tabId || null,
+    startedAt: Date.now(),
+  };
+  return {
+    ...response,
+    serviceWorkerWillStayAlive: true,
+    disconnectOnIdleMs: NATIVE_HOST_IDLE_TIMEOUT_MS,
+  };
+});
+
+// TOOL REGISTRATION: native_host_authenticated_fetch
+// WHAT: Relays an authenticated HTTP request through the native host.
+// WHY: This gives CSP-restricted workflows a supported path that does not rely on page-context injection.
+reg('native_host_authenticated_fetch', async (p = {}) => {
+  if (!p.url || typeof p.url !== 'string' || !isSafeUrl(p.url)) {
+    throw new Error('A safe http/https url is required for native_host_authenticated_fetch');
+  }
+
+  let nativeFetchUrl;
+  try {
+    nativeFetchUrl = new URL(p.url);
+  } catch (_error) {
+    throw new Error('native_host_authenticated_fetch requires a valid URL');
+  }
+
+  if (!['http:', 'https:'].includes(nativeFetchUrl.protocol)) {
+    throw new Error('native_host_authenticated_fetch supports only http/https URLs');
+  }
+
+  const headers = await maybeAugmentHeadersForNativeFetch({
+    url: p.url,
+    headers: p.headers,
+    includeCookies: p.includeCookies !== false,
+  });
+
+  const workflowId = p.workflowId || nativeWorkflowSession?.workflowId || null;
+  const payload = {
+    workflowId,
+    url: p.url,
+    method: p.method || 'GET',
+    timeoutMs: p.timeoutMs,
+    headers,
+    bodyText: p.bodyText,
+    bodyBase64: p.bodyBase64,
+  };
+
+  const response = await nativeHostRequest('fetch.http', payload, {
+    source: 'service_worker',
+    workflowId,
+  });
+
+  return {
+    ...response,
+    workflowId,
+    cookieRelay: p.includeCookies !== false,
+  };
+});
+
+// TOOL REGISTRATION: native_host_end_workflow
+// WHAT: Closes the scoped authenticated-session workflow and tears down the native port.
+// WHY: Explicit shutdown prevents the native port from holding the MV3 worker alive longer than intended.
+reg('native_host_end_workflow', async (p = {}) => {
+  const workflowId = p.workflowId || nativeWorkflowSession?.workflowId;
+  if (!workflowId) {
+    return { closed: false, reason: 'no-active-workflow' };
+  }
+
+  try {
+    return await nativeHostRequest('workflow.end', { workflowId }, { source: 'service_worker', workflowId });
+  } finally {
+    disconnectNativePort('workflow-ended');
+  }
+});
+
 // --- System ---
-reg('health', async () => ({ status: 'ok', version: VERSION, hfConnected: hfWs && hfWs.readyState === WebSocket.OPEN, toolsCount: Object.keys(TOOL_REGISTRY).length, timestamp: Date.now() }));
+// TOOL REGISTRATION: health
+// WHAT: Registers the health tool for the MCP Server.
+// WHY: Agents use this to control the browser.
+reg('health', async () => ({ status: 'ok', version: VERSION, hfConnected: hfWs && hfWs.readyState === WebSocket.OPEN, nativeHostConnected: nativeState.connected, nativeWorkflowActive: !!nativeWorkflowSession, toolsCount: Object.keys(TOOL_REGISTRY).length, timestamp: Date.now() }));
+// TOOL REGISTRATION: list_tools
+// WHAT: Registers the list_tools tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('list_tools', async () => ({ tools: Object.keys(TOOL_REGISTRY).sort(), count: Object.keys(TOOL_REGISTRY).length }));
 
 // --- Extension Info & Debug Tools ---
+// TOOL REGISTRATION: get_extension_info
+// WHAT: Registers the get_extension_info tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('get_extension_info', async () => {
   return {
     version: VERSION,
@@ -456,6 +1453,9 @@ reg('get_extension_info', async () => {
   };
 });
 
+// TOOL REGISTRATION: clear_logs
+// WHAT: Registers the clear_logs tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('clear_logs', async () => {
   recentLogs = [];
   return { success: true };
@@ -464,6 +1464,9 @@ reg('clear_logs', async () => {
 // --- ULTIMATE BYPASS FEATURES (v2.8.0) ---
 
 // Advanced Stealth Mode
+// TOOL REGISTRATION: advanced_stealth
+// WHAT: Registers the advanced_stealth tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('advanced_stealth', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -568,6 +1571,9 @@ reg('advanced_stealth', async (p) => {
 });
 
 // Cloudflare/CAPTCHA Detection
+// TOOL REGISTRATION: detect_challenges
+// WHAT: Registers the detect_challenges tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('detect_challenges', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -610,6 +1616,9 @@ reg('detect_challenges', async (p) => {
 });
 
 // Anti-Bot Behavior Simulation
+// TOOL REGISTRATION: simulate_human_behavior
+// WHAT: Registers the simulate_human_behavior tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('simulate_human_behavior', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -635,6 +1644,9 @@ reg('simulate_human_behavior', async (p) => {
 });
 
 // Session Persistence
+// TOOL REGISTRATION: save_session
+// WHAT: Registers the save_session tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('save_session', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -657,6 +1669,9 @@ reg('save_session', async (p) => {
   });
 });
 
+// TOOL REGISTRATION: restore_session
+// WHAT: Registers the restore_session tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('restore_session', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, (sessionData) => {
@@ -676,6 +1691,9 @@ reg('restore_session', async (p) => {
 });
 
 // Rate Limit Handling
+// TOOL REGISTRATION: handle_rate_limit
+// WHAT: Registers the handle_rate_limit tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('handle_rate_limit', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -694,6 +1712,9 @@ reg('handle_rate_limit', async (p) => {
 
 // --- CLOUDFLARE BYPASS ENGINE (v2.9.0) ---
 
+// TOOL REGISTRATION: bypass_cloudflare
+// WHAT: Registers the bypass_cloudflare tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('bypass_cloudflare', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -721,27 +1742,19 @@ reg('bypass_cloudflare', async (p) => {
   });
 });
 
+// TOOL REGISTRATION: bypass_cloudflare_turnstile
+// WHAT: Registers the bypass_cloudflare_turnstile tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('bypass_cloudflare_turnstile', async (p) => {
   const tabId = p.tabId || await activeTabId();
-  return safeExecute(tabId, () => {
-    const iframes = document.querySelectorAll('iframe[src*="challenges.cloudflare.com"]');
-    if (iframes.length === 0) return { solved: false, reason: 'No Turnstile found' };
-    
-    // Turnstile auto-solves with human-like delay + mouse movement
-    const btn = document.querySelector('input[type="checkbox"]') || 
-                document.querySelector('[role="checkbox"]');
-    if (btn) {
-      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      setTimeout(() => btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })), 100);
-      setTimeout(() => btn.click(), 200);
-      return { solved: true, method: 'checkbox_click' };
-    }
-    return { solved: false, reason: 'No clickable element found' };
-  });
+  return safeExecute(tabId, runHumanEntropyDomInteraction, [{ kind: 'turnstile-click' }]);
 });
 
 // --- CAPTCHA DETECTION & BYPASS (v2.9.0) ---
 
+// TOOL REGISTRATION: detect_recaptcha
+// WHAT: Registers the detect_recaptcha tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('detect_recaptcha', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -764,40 +1777,21 @@ reg('detect_recaptcha', async (p) => {
   });
 });
 
+// TOOL REGISTRATION: solve_recaptcha_checkbox
+// WHAT: Registers the solve_recaptcha_checkbox tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('solve_recaptcha_checkbox', async (p) => {
   const tabId = p.tabId || await activeTabId();
-  return safeExecute(tabId, () => {
-    // Click reCAPTCHA checkbox in iframe
-    const iframe = document.querySelector('iframe[src*="google.com/recaptcha/api2/bframe"]');
-    if (!iframe) return { solved: false, reason: 'No reCAPTCHA iframe found' };
-    
-    // Try to access iframe content (same-origin only)
-    try {
-      const checkbox = iframe.contentDocument?.querySelector('.recaptcha-checkbox');
-      if (checkbox) {
-        checkbox.click();
-        return { solved: true, method: 'direct_click' };
-      }
-    } catch(e) {
-      // Cross-origin — use coordinate-based click
-      const rect = iframe.getBoundingClientRect();
-      if (rect.width > 0) {
-        document.dispatchEvent(new MouseEvent('click', { 
-          clientX: rect.left + rect.width / 2, 
-          clientY: rect.top + rect.height / 2, 
-          bubbles: true 
-        }));
-        return { solved: true, method: 'coordinate_click', x: Math.round(rect.left + rect.width/2), y: Math.round(rect.top + rect.height/2) };
-      }
-    }
-    return { solved: false, reason: 'Could not access checkbox' };
-  });
+  return safeExecute(tabId, runHumanEntropyDomInteraction, [{ kind: 'recaptcha-click' }]);
 });
 
 // --- FINGERPRINT ROTATION (v2.9.0) ---
 
 let fingerprintProfile = null;
 
+// TOOL REGISTRATION: rotate_fingerprint
+// WHAT: Registers the rotate_fingerprint tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('rotate_fingerprint', async (p) => {
   const tabId = p.tabId || await activeTabId();
   
@@ -846,12 +1840,18 @@ reg('rotate_fingerprint', async (p) => {
   }, [fingerprintProfile]);
 });
 
+// TOOL REGISTRATION: get_fingerprint
+// WHAT: Registers the get_fingerprint tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('get_fingerprint', async () => {
   return { profile: fingerprintProfile, rotated: !!fingerprintProfile };
 });
 
 // --- ANTI-BOT DETECTION (v2.9.0) ---
 
+// TOOL REGISTRATION: detect_bot_protection
+// WHAT: Registers the detect_bot_protection tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('detect_bot_protection', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -896,6 +1896,9 @@ reg('detect_bot_protection', async (p) => {
   });
 });
 
+// TOOL REGISTRATION: evasion_mode
+// WHAT: Registers the evasion_mode tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('evasion_mode', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -942,6 +1945,9 @@ const UA_PROFILES = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
 ];
 
+// TOOL REGISTRATION: rotate_user_agent
+// WHAT: Registers the rotate_user_agent tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('rotate_user_agent', async (p) => {
   const ua = p.userAgent || UA_PROFILES[Math.floor(Math.random() * UA_PROFILES.length)];
   // Note: Can't override navigator.userAgent in Chrome extensions directly
@@ -951,6 +1957,9 @@ reg('rotate_user_agent', async (p) => {
 
 // --- REFERRER SPOOFING (v2.9.0) ---
 
+// TOOL REGISTRATION: set_referrer
+// WHAT: Registers the set_referrer tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('set_referrer', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, (referrer) => {
@@ -961,6 +1970,9 @@ reg('set_referrer', async (p) => {
 
 // --- BEHAVIORAL PATTERN RANDOMIZATION (v2.9.0) ---
 
+// TOOL REGISTRATION: randomize_behavior
+// WHAT: Registers the randomize_behavior tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('randomize_behavior', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -999,6 +2011,9 @@ reg('randomize_behavior', async (p) => {
 
 // --- FORM AUTO-DETECTION & SMART FILL (v2.9.0) ---
 
+// TOOL REGISTRATION: smart_fill_form
+// WHAT: Registers the smart_fill_form tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('smart_fill_form', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, (profile) => {
@@ -1088,6 +2103,9 @@ reg('smart_fill_form', async (p) => {
 
 // --- SHADOW DOM INTERACTION (v2.9.0) ---
 
+// TOOL REGISTRATION: query_shadow_dom
+// WHAT: Registers the query_shadow_dom tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('query_shadow_dom', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, (selector) => {
@@ -1117,36 +2135,19 @@ reg('query_shadow_dom', async (p) => {
   }, [p.selector]);
 });
 
+// TOOL REGISTRATION: click_shadow_element
+// WHAT: Registers the click_shadow_element tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('click_shadow_element', async (p) => {
   const tabId = p.tabId || await activeTabId();
-  return safeExecute(tabId, (selector) => {
-    const findInShadow = (root) => {
-      const el = root.querySelector(selector);
-      if (el) return el;
-      for (const child of root.children || []) {
-        if (child.shadowRoot) {
-          const found = findInShadow(child.shadowRoot);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-    
-    const el = findInShadow(document) || document.querySelector(selector);
-    if (!el) return { clicked: false, reason: 'Element not found' };
-    
-    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    setTimeout(() => {
-      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-      el.click();
-    }, 50);
-    
-    return { clicked: true, tag: el.tagName, inShadowRoot: !!el.getRootNode?.()?.host };
-  }, [p.selector]);
+  return safeExecute(tabId, runHumanEntropyDomInteraction, [{ kind: 'shadow-click', selector: p.selector }]);
 });
 
 // --- IFRAME INTERACTION (v2.9.0) ---
 
+// TOOL REGISTRATION: list_iframes
+// WHAT: Registers the list_iframes tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('list_iframes', async (p) => {
   const tabId = p.tabId || await activeTabId();
   return safeExecute(tabId, () => {
@@ -1167,11 +2168,23 @@ reg('list_iframes', async (p) => {
   });
 });
 
+// TOOL REGISTRATION: interact_iframe
+// WHAT: Registers the interact_iframe tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('interact_iframe', async (p) => {
   const ALLOWED_ACTIONS = ['click', 'type', 'get_text', 'get_html'];
   if (!p.action || !ALLOWED_ACTIONS.includes(p.action)) return { error: `action must be one of: ${ALLOWED_ACTIONS.join(', ')}` };
   const tabId = p.tabId || await activeTabId();
-  return safeExecute(tabId, ({ selector: iframeSelector, action, innerSelector }) => {
+
+  if (p.action === 'click') {
+    return safeExecute(tabId, runHumanEntropyDomInteraction, [{
+      kind: 'iframe-click',
+      iframeSelector: p.selector,
+      innerSelector: p.innerSelector,
+    }]);
+  }
+
+  return safeExecute(tabId, ({ selector: iframeSelector, action, innerSelector, text }) => {
     const iframe = document.querySelector(iframeSelector);
     if (!iframe) return { error: 'Iframe not found' };
     
@@ -1182,12 +2195,8 @@ reg('interact_iframe', async (p) => {
       const target = doc.querySelector(innerSelector);
       if (!target) return { error: `Element "${innerSelector}" not found in iframe` };
       
-      if (action === 'click') {
-        target.click();
-        return { success: true, action: 'click', tag: target.tagName };
-      }
-      if (action === 'type' && p.text) {
-        target.value = p.text;
+      if (action === 'type' && text) {
+        target.value = text;
         target.dispatchEvent(new Event('input', { bubbles: true }));
         return { success: true, action: 'type', tag: target.tagName };
       }
@@ -1202,11 +2211,14 @@ reg('interact_iframe', async (p) => {
     } catch(e) {
       return { error: `Access denied: ${e.message}` };
     }
-  }, [p]);
+  }, [{ selector: p.selector, action: p.action, innerSelector: p.innerSelector, text: p.text }]);
 });
 
 // --- COOKIE PERSISTENCE & ROTATION (v2.9.0) ---
 
+// TOOL REGISTRATION: export_all_cookies
+// WHAT: Registers the export_all_cookies tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('export_all_cookies', async (p) => {
   const tabId = p.tabId || await activeTabId();
   const tab = await chrome.tabs.get(tabId);
@@ -1215,6 +2227,9 @@ reg('export_all_cookies', async (p) => {
   return { count: cookies.length, cookies, domain: url.hostname };
 });
 
+// TOOL REGISTRATION: import_cookies
+// WHAT: Registers the import_cookies tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('import_cookies', async (p) => {
   const cookies = p.cookies || [];
   if (!Array.isArray(cookies)) return { error: 'cookies must be an array' };
@@ -1225,23 +2240,35 @@ reg('import_cookies', async (p) => {
     if (!cookie.name || typeof cookie.name !== 'string' || cookie.name.length > 4096) continue;
     if (typeof cookie.value !== 'string' || cookie.value.length > 4096) continue;
     try {
-      await chrome.cookies.set({
-        url: cookie.url || `https://${cookie.domain}`,
+      let targetUrl = cookie.url;
+      if (!targetUrl) {
+        let cleanDomain = cookie.domain;
+        if (cleanDomain.startsWith('.')) cleanDomain = cleanDomain.substring(1);
+        targetUrl = `https://${cleanDomain}`;
+      }
+      const cookieDetails = {
+        url: targetUrl,
         name: cookie.name,
         value: cookie.value,
-        domain: cookie.domain,
         path: cookie.path || '/',
         secure: !!cookie.secure,
         httpOnly: !!cookie.httpOnly,
         sameSite: cookie.sameSite || 'lax',
         expirationDate: cookie.expirationDate,
-      });
+      };
+      if (!cookie.hostOnly) {
+        cookieDetails.domain = cookie.domain;
+      }
+      await chrome.cookies.set(cookieDetails);
       imported++;
     } catch(e) { log('warn', `Failed to import cookie: ${e.message}`); }
   }
   return { imported, total: cookies.length };
 });
 
+// TOOL REGISTRATION: rotate_cookies
+// WHAT: Registers the rotate_cookies tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('rotate_cookies', async (p) => {
   const tabId = p.tabId || await activeTabId();
   const tab = await chrome.tabs.get(tabId);
@@ -1264,6 +2291,9 @@ reg('rotate_cookies', async (p) => {
 
 // --- PROXY INTEGRATION (v2.9.0) ---
 
+// TOOL REGISTRATION: set_proxy
+// WHAT: Registers the set_proxy tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('set_proxy', async (p) => {
   if (!p.host || typeof p.host !== 'string' || p.host.trim() === '') return { error: 'Proxy host required' };
   if (!p.port) return { error: 'Proxy port required' };
@@ -1290,6 +2320,9 @@ reg('set_proxy', async (p) => {
   }
 });
 
+// TOOL REGISTRATION: clear_proxy
+// WHAT: Registers the clear_proxy tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('clear_proxy', async () => {
   try {
     await chrome.proxy.settings.clear({ scope: 'regular' });
@@ -1394,23 +2427,389 @@ function avBuildTree(nodes, tabId) {
   return lines.join('\n');
 }
 
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function captureTabScreenshot(tabId) {
+  const result = await cdpSend(tabId, 'Page.captureScreenshot', { format: 'png', fromSurface: true });
+  return `data:image/png;base64,${result.data}`;
+}
+
+async function captureObservationSnapshot(tabId, options = {}) {
+  const includeScreenshot = options.includeScreenshot !== false;
+  const { nodes } = await cdpSend(tabId, 'Accessibility.getFullAXTree', {});
+  _refMap.clear();
+  _refCounter = 0;
+
+  const tree = avBuildTree(nodes, tabId);
+  const refCount = _refMap.size;
+  const tab = await chrome.tabs.get(tabId);
+  const snapshot = {
+    tree,
+    refCount,
+    timestamp: Date.now(),
+    tabId,
+    url: tab?.url || null,
+    title: tab?.title || null,
+  };
+
+  if (includeScreenshot) {
+    snapshot.screenshotDataUrl = await captureTabScreenshot(tabId);
+  }
+
+  return snapshot;
+}
+
+function storeInteractionProof(proof) {
+  _interactionProofCounter += 1;
+  const proofId = `proof-${_interactionProofCounter}`;
+  const storedProof = {
+    ...proof,
+    proofId,
+  };
+  _interactionProofs.set(proofId, storedProof);
+
+  while (_interactionProofs.size > OBSERVATION_DEFAULTS.maxStoredProofs) {
+    const oldestKey = _interactionProofs.keys().next().value;
+    if (!oldestKey) break;
+    _interactionProofs.delete(oldestKey);
+  }
+
+  return storedProof;
+}
+
+async function scrollRefIntoView(ref) {
+  try {
+    await cdpSend(ref.tabId, 'DOM.scrollIntoViewIfNeeded', { backendNodeId: ref.backendDOMNodeId });
+  } catch (_error) {
+    // The runtime keeps going even when Chrome cannot scroll a detached node.
+    // The follow-up strategy result will carry the real failure signal.
+  }
+}
+
+async function resolveRefObjectId(ref) {
+  const resolvedNode = await cdpSend(ref.tabId, 'DOM.resolveNode', { backendNodeId: ref.backendDOMNodeId });
+  return resolvedNode?.object?.objectId || null;
+}
+
+async function callRefFunction(ref, functionDeclaration) {
+  const objectId = await resolveRefObjectId(ref);
+  if (!objectId) {
+    return { error: 'Failed to resolve target element for fallback execution.' };
+  }
+
+  const callResult = await cdpSend(ref.tabId, 'Runtime.callFunctionOn', {
+    objectId,
+    functionDeclaration,
+    returnByValue: true,
+    awaitPromise: true,
+    userGesture: true,
+  });
+
+  if (callResult.exceptionDetails) {
+    return {
+      error: callResult.exceptionDetails.exception?.description || callResult.exceptionDetails.text || 'Fallback execution failed.',
+    };
+  }
+
+  return callResult.result?.value || { success: true };
+}
+
+async function executeCdpMouseStrategy(ref) {
+  const { model } = await cdpSend(ref.tabId, 'DOM.getBoxModel', { backendNodeId: ref.backendDOMNodeId });
+  const pointerTarget = humanEntropyPointFromBorder(model.border, 5);
+  const settledPoint = await humanEntropyClickCdp(ref.tabId, pointerTarget);
+
+  return {
+    success: true,
+    strategy: 'cdp_mouse',
+    position: settledPoint,
+  };
+}
+
+async function executeDomClickStrategy(ref) {
+  return callRefFunction(ref, `async function () {
+    const element = this;
+    if (!element) {
+      return { success: false, reason: 'missing-element' };
+    }
+
+    const randomBetween = (min, max) => min + Math.random() * (max - min);
+    const randomInt = (min, max) => Math.round(randomBetween(min, max));
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+    const dispatchMouse = (type, point, extra = {}) => {
+      element.dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: point.x,
+        clientY: point.y,
+        screenX: window.screenX + point.x,
+        screenY: window.screenY + point.y,
+        button: extra.button ?? 0,
+        buttons: extra.buttons ?? 0,
+        detail: extra.detail ?? 1,
+      }));
+    };
+
+    if (typeof element.scrollIntoView === 'function') {
+      element.scrollIntoView({ block: 'center', inline: 'center' });
+    }
+    if (typeof element.focus === 'function') {
+      element.focus({ preventScroll: true });
+    }
+
+    const rect = typeof element.getBoundingClientRect === 'function'
+      ? element.getBoundingClientRect()
+      : null;
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return { success: false, reason: 'invalid-rect' };
+    }
+
+    const destination = {
+      x: Math.round(clamp((rect.left + rect.right) / 2 + randomBetween(-Math.min(5, Math.max(1, rect.width / 4)), Math.min(5, Math.max(1, rect.width / 4))), rect.left + 1, rect.right - 1)),
+      y: Math.round(clamp((rect.top + rect.bottom) / 2 + randomBetween(-Math.min(5, Math.max(1, rect.height / 4)), Math.min(5, Math.max(1, rect.height / 4))), rect.top + 1, rect.bottom - 1)),
+    };
+    const start = {
+      x: Math.round(destination.x + randomBetween(-28, 28)),
+      y: Math.round(destination.y + randomBetween(-18, 18)),
+    };
+    const steps = randomInt(2, 4);
+
+    for (let step = 1; step <= steps; step += 1) {
+      const progress = step / steps;
+      const remainingNoise = 2 * (1 - progress);
+      const point = {
+        x: Math.round(start.x + ((destination.x - start.x) * progress) + randomBetween(-remainingNoise, remainingNoise)),
+        y: Math.round(start.y + ((destination.y - start.y) * progress) + randomBetween(-remainingNoise, remainingNoise)),
+      };
+      dispatchMouse('mousemove', point, { buttons: 0 });
+      await sleep(randomInt(12, 28));
+    }
+
+    dispatchMouse('mouseover', destination, { buttons: 0 });
+    await sleep(randomInt(24, 72));
+    dispatchMouse('mousedown', destination, { button: 0, buttons: 1, detail: 1 });
+    await sleep(randomInt(55, 150));
+    dispatchMouse('mouseup', destination, { button: 0, buttons: 0, detail: 1 });
+    await sleep(randomInt(18, 60));
+
+    if (typeof element.click === 'function') {
+      element.click();
+    } else {
+      dispatchMouse('click', destination, { button: 0, buttons: 0, detail: 1 });
+    }
+
+    return {
+      success: true,
+      strategy: 'dom_click',
+      tagName: element.tagName || null,
+      textPreview: (element.innerText || element.textContent || '').trim().slice(0, 120),
+      rect: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+      position: destination,
+    };
+  }`);
+}
+
+async function executeDomDispatchStrategy(ref) {
+  return callRefFunction(ref, `async function () {
+    const element = this;
+    if (!element) {
+      return { success: false, reason: 'missing-element' };
+    }
+
+    const randomBetween = (min, max) => min + Math.random() * (max - min);
+    const randomInt = (min, max) => Math.round(randomBetween(min, max));
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+    const dispatchMouse = (type, point, extra = {}) => {
+      element.dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: point.x,
+        clientY: point.y,
+        screenX: window.screenX + point.x,
+        screenY: window.screenY + point.y,
+        button: extra.button ?? 0,
+        buttons: extra.buttons ?? 0,
+        detail: extra.detail ?? 1,
+      }));
+    };
+
+    if (typeof element.scrollIntoView === 'function') {
+      element.scrollIntoView({ block: 'center', inline: 'center' });
+    }
+    if (typeof element.focus === 'function') {
+      element.focus({ preventScroll: true });
+    }
+
+    const rect = typeof element.getBoundingClientRect === 'function'
+      ? element.getBoundingClientRect()
+      : null;
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return { success: false, reason: 'invalid-rect' };
+    }
+
+    const destination = {
+      x: Math.round(clamp((rect.left + rect.right) / 2 + randomBetween(-Math.min(5, Math.max(1, rect.width / 4)), Math.min(5, Math.max(1, rect.width / 4))), rect.left + 1, rect.right - 1)),
+      y: Math.round(clamp((rect.top + rect.bottom) / 2 + randomBetween(-Math.min(5, Math.max(1, rect.height / 4)), Math.min(5, Math.max(1, rect.height / 4))), rect.top + 1, rect.bottom - 1)),
+    };
+    const start = {
+      x: Math.round(destination.x + randomBetween(-28, 28)),
+      y: Math.round(destination.y + randomBetween(-18, 18)),
+    };
+    const steps = randomInt(2, 4);
+
+    for (let step = 1; step <= steps; step += 1) {
+      const progress = step / steps;
+      const remainingNoise = 2 * (1 - progress);
+      const point = {
+        x: Math.round(start.x + ((destination.x - start.x) * progress) + randomBetween(-remainingNoise, remainingNoise)),
+        y: Math.round(start.y + ((destination.y - start.y) * progress) + randomBetween(-remainingNoise, remainingNoise)),
+      };
+      dispatchMouse('mousemove', point, { buttons: 0 });
+      await sleep(randomInt(12, 28));
+    }
+
+    dispatchMouse('mouseover', destination, { buttons: 0 });
+    await sleep(randomInt(24, 72));
+    dispatchMouse('mousedown', destination, { button: 0, buttons: 1, detail: 1 });
+    await sleep(randomInt(55, 150));
+    dispatchMouse('mouseup', destination, { button: 0, buttons: 0, detail: 1 });
+    await sleep(randomInt(18, 60));
+    dispatchMouse('click', destination, { button: 0, buttons: 0, detail: 1 });
+
+    return {
+      success: true,
+      strategy: 'dom_dispatch',
+      tagName: element.tagName || null,
+      textPreview: (element.innerText || element.textContent || '').trim().slice(0, 120),
+      rect: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+      position: destination,
+    };
+  }`);
+}
+
+async function executeRefStrategy(ref, strategy) {
+  await scrollRefIntoView(ref);
+
+  if (strategy === 'cdp_mouse') {
+    return executeCdpMouseStrategy(ref);
+  }
+  if (strategy === 'dom_click') {
+    return executeDomClickStrategy(ref);
+  }
+  if (strategy === 'dom_dispatch') {
+    return executeDomDispatchStrategy(ref);
+  }
+
+  return { error: `Unknown interaction strategy: ${strategy}` };
+}
+
+async function observeRefInteraction(ref, options = {}) {
+  const strategies = Array.isArray(options.strategies) && options.strategies.length > 0
+    ? options.strategies
+    : ['cdp_mouse', 'dom_click', 'dom_dispatch'];
+  const settleDelayMs = Number.isFinite(options.settleDelayMs)
+    ? Math.max(0, options.settleDelayMs)
+    : OBSERVATION_DEFAULTS.settleDelayMs;
+  const minVisualChangeRatio = Number.isFinite(options.minVisualChangeRatio)
+    ? Math.max(0, options.minVisualChangeRatio)
+    : OBSERVATION_DEFAULTS.minVisualChangeRatio;
+  const attempts = [];
+
+  let beforeSnapshot = await captureObservationSnapshot(ref.tabId, { includeScreenshot: true });
+  _lastSnapshot = beforeSnapshot;
+
+  for (let index = 0; index < strategies.length; index += 1) {
+    const strategy = strategies[index];
+    const startedAt = Date.now();
+    let execution;
+
+    try {
+      execution = await executeRefStrategy(ref, strategy);
+    } catch (error) {
+      execution = { error: error.message, strategy };
+    }
+
+    if (settleDelayMs > 0) {
+      await waitMs(settleDelayMs);
+    }
+
+    const afterSnapshot = await captureObservationSnapshot(ref.tabId, { includeScreenshot: true });
+    const assessment = evaluateObservation({
+      beforeSnapshot,
+      afterSnapshot,
+      strategy,
+      minVisualChangeRatio,
+    });
+    const attempt = {
+      strategy,
+      durationMs: Date.now() - startedAt,
+      fallbackTriggered: index > 0,
+      execution,
+      assessment,
+      artifacts: {
+        beforeSnapshot,
+        afterSnapshot,
+      },
+    };
+    attempts.push(attempt);
+    beforeSnapshot = afterSnapshot;
+    _lastSnapshot = afterSnapshot;
+
+    if (!execution?.error && assessment.changed) {
+      break;
+    }
+  }
+
+  const storedProof = storeInteractionProof({
+    createdAt: new Date().toISOString(),
+    ref: {
+      refId: ref.refId,
+      role: ref.role,
+      name: ref.name,
+      tabId: ref.tabId,
+    },
+    attempts,
+  });
+  const proofSummary = summarizeProof(storedProof);
+  const finalAttempt = storedProof.attempts[storedProof.attempts.length - 1] || null;
+
+  return {
+    success: !!proofSummary.finalChanged,
+    ref: ref.refId,
+    role: ref.role,
+    name: ref.name,
+    proofId: storedProof.proofId,
+    proof: proofSummary,
+    fallbackTriggered: proofSummary.fallbackTriggered,
+    noOpDetected: proofSummary.noOpDetected,
+    strategiesTried: proofSummary.attempts.map((attempt) => attempt.strategy),
+    ...(finalAttempt?.execution?.error ? { error: finalAttempt.execution.error } : {}),
+  };
+}
+
+// TOOL REGISTRATION: snapshot
+// WHAT: Registers the snapshot tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('snapshot', async (p) => {
   const tabId = p?.tabId || await activeTabId();
   try {
-    const { nodes } = await cdpSend(tabId, 'Accessibility.getFullAXTree', {});
-    _refMap.clear();
-    _refCounter = 0;
-
-    const tree = avBuildTree(nodes, tabId);
-    const refCount = _refMap.size;
-
-    _lastSnapshot = { tree, refCount, timestamp: Date.now(), tabId };
+    const snapshot = await captureObservationSnapshot(tabId, {
+      includeScreenshot: p?.includeScreenshot === true,
+    });
+    _lastSnapshot = snapshot;
 
     return {
-      tree,
-      refCount,
-      totalNodes: nodes.length,
-      timestamp: _lastSnapshot.timestamp,
+      tree: snapshot.tree,
+      refCount: snapshot.refCount,
+      totalNodes: snapshot.tree ? snapshot.tree.split('\n').filter(Boolean).length : 0,
+      timestamp: snapshot.timestamp,
+      ...(snapshot.screenshotDataUrl ? { screenshotDataUrl: snapshot.screenshotDataUrl } : {}),
     };
   } catch (e) {
     log('error', `snapshot failed: ${e.message}`);
@@ -1418,31 +2817,56 @@ reg('snapshot', async (p) => {
   }
 });
 
+// Rebuild the current tab snapshot and translate the live ref map into the
+// compact structure expected by the deterministic primitive matcher.
+async function buildDeterministicRefsForTab(tabId) {
+  const snapshotResult = await execTool('snapshot', { tabId });
+  if (!snapshotResult || snapshotResult.error) {
+    return { refs: [], snapshotError: snapshotResult?.error || 'snapshot unavailable' };
+  }
+
+  const refs = [];
+  for (const [refId, ref] of _refMap.entries()) {
+    if (ref.tabId !== tabId) {
+      continue;
+    }
+
+    refs.push({
+      ref: refId,
+      role: ref.role,
+      name: ref.name,
+    });
+  }
+
+  return { refs, snapshotError: null };
+}
+
+// TOOL REGISTRATION: click_ref
+// WHAT: Registers the click_ref tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('click_ref', async (p) => {
   if (!p?.ref || typeof p.ref !== 'string') return { error: 'ref is required (e.g. "@e3")' };
   const ref = _refMap.get(p.ref);
   if (!ref) return { error: `Unknown ref: ${p.ref}. Run snapshot first.` };
 
   try {
-    const { model } = await cdpSend(ref.tabId, 'DOM.getBoxModel', { backendNodeId: ref.backendDOMNodeId });
-    const border = model.border;
-    const x = Math.round((border[0] + border[2] + border[4] + border[6]) / 4);
-    const y = Math.round((border[1] + border[3] + border[5] + border[7]) / 4);
-
-    await cdpSend(ref.tabId, 'Input.dispatchMouseEvent', {
-      type: 'mousePressed', x, y, button: 'left', clickCount: 1,
+    return await observeRefInteraction({
+      ...ref,
+      refId: p.ref,
+    }, {
+      strategies: Array.isArray(p?.strategies) ? p.strategies : undefined,
+      settleDelayMs: p?.settleDelayMs,
+      minVisualChangeRatio: p?.minVisualChangeRatio,
     });
-    await cdpSend(ref.tabId, 'Input.dispatchMouseEvent', {
-      type: 'mouseReleased', x, y, button: 'left', clickCount: 1,
-    });
-
-    return { success: true, ref: p.ref, role: ref.role, name: ref.name, position: { x, y } };
   } catch (e) {
     log('error', `click_ref failed: ${e.message}`);
     return { error: e.message, ref: p.ref };
   }
 });
 
+// TOOL REGISTRATION: type_ref
+// WHAT: Registers the type_ref tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('type_ref', async (p) => {
   if (!p?.ref || typeof p.ref !== 'string') return { error: 'ref is required (e.g. "@e1")' };
   if (p.text === undefined || typeof p.text !== 'string') return { error: 'text is required' };
@@ -1469,6 +2893,9 @@ reg('type_ref', async (p) => {
   }
 });
 
+// TOOL REGISTRATION: select_ref
+// WHAT: Registers the select_ref tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('select_ref', async (p) => {
   if (!p?.ref || typeof p.ref !== 'string') return { error: 'ref is required' };
   if (!p.value && !p.index && p.index !== 0) return { error: 'value or index required' };
@@ -1500,6 +2927,9 @@ reg('select_ref', async (p) => {
   }
 });
 
+// TOOL REGISTRATION: hover_ref
+// WHAT: Registers the hover_ref tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('hover_ref', async (p) => {
   if (!p?.ref || typeof p.ref !== 'string') return { error: 'ref is required' };
   const ref = _refMap.get(p.ref);
@@ -1507,21 +2937,19 @@ reg('hover_ref', async (p) => {
 
   try {
     const { model } = await cdpSend(ref.tabId, 'DOM.getBoxModel', { backendNodeId: ref.backendDOMNodeId });
-    const border = model.border;
-    const x = Math.round((border[0] + border[2] + border[4] + border[6]) / 4);
-    const y = Math.round((border[1] + border[3] + border[5] + border[7]) / 4);
+    const pointerTarget = humanEntropyPointFromBorder(model.border, 4);
+    const settledPoint = await humanEntropyHoverCdp(ref.tabId, pointerTarget);
 
-    await cdpSend(ref.tabId, 'Input.dispatchMouseEvent', {
-      type: 'mouseMoved', x, y,
-    });
-
-    return { success: true, ref: p.ref, role: ref.role, name: ref.name, position: { x, y } };
+    return { success: true, ref: p.ref, role: ref.role, name: ref.name, position: settledPoint };
   } catch (e) {
     log('error', `hover_ref failed: ${e.message}`);
     return { error: e.message, ref: p.ref };
   }
 });
 
+// TOOL REGISTRATION: screenshot_annotated
+// WHAT: Registers the screenshot_annotated tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('screenshot_annotated', async (p) => {
   const tabId = p?.tabId || await activeTabId();
   try {
@@ -1586,23 +3014,27 @@ reg('screenshot_annotated', async (p) => {
   }
 });
 
+// TOOL REGISTRATION: observe
+// WHAT: Registers the observe tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('observe', async (p) => {
   const tabId = p?.tabId || await activeTabId();
   try {
-    const { nodes } = await cdpSend(tabId, 'Accessibility.getFullAXTree', {});
-    _refMap.clear();
-    _refCounter = 0;
-
-    const tree = avBuildTree(nodes, tabId);
-    const refCount = _refMap.size;
-    _lastSnapshot = { tree, refCount, timestamp: Date.now(), tabId };
-
-    const screenshotResult = await execTool('screenshot_annotated', { tabId });
+    const snapshot = await captureObservationSnapshot(tabId, { includeScreenshot: true });
+    _lastSnapshot = snapshot;
 
     return {
-      snapshot: { tree, refCount, totalNodes: nodes.length },
-      screenshot: screenshotResult,
-      timestamp: _lastSnapshot.timestamp,
+      snapshot: {
+        tree: snapshot.tree,
+        refCount: snapshot.refCount,
+        totalNodes: snapshot.tree ? snapshot.tree.split('\n').filter(Boolean).length : 0,
+      },
+      screenshot: {
+        dataUrl: snapshot.screenshotDataUrl,
+      },
+      timestamp: snapshot.timestamp,
+      url: snapshot.url,
+      title: snapshot.title,
     };
   } catch (e) {
     log('error', `observe failed: ${e.message}`);
@@ -1610,40 +3042,33 @@ reg('observe', async (p) => {
   }
 });
 
+// TOOL REGISTRATION: page_diff
+// WHAT: Registers the page_diff tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('page_diff', async (p) => {
   const tabId = p?.tabId || await activeTabId();
   if (!_lastSnapshot) return { error: 'No previous snapshot. Run snapshot or observe first.' };
 
   try {
     const previous = _lastSnapshot;
-    const { nodes } = await cdpSend(tabId, 'Accessibility.getFullAXTree', {});
-    _refMap.clear();
-    _refCounter = 0;
+    const current = await captureObservationSnapshot(tabId, {
+      includeScreenshot: p?.includeScreenshot === true || !!previous.screenshotDataUrl,
+    });
+    _lastSnapshot = current;
 
-    const tree = avBuildTree(nodes, tabId);
-    const refCount = _refMap.size;
-    _lastSnapshot = { tree, refCount, timestamp: Date.now(), tabId };
-
-    const prevLines = new Set(previous.tree.split('\n'));
-    const currLines = new Set(tree.split('\n'));
-
-    const added = [];
-    const removed = [];
-    for (const line of currLines) {
-      if (!prevLines.has(line) && line.trim()) added.push(line);
-    }
-    for (const line of prevLines) {
-      if (!currLines.has(line) && line.trim()) removed.push(line);
-    }
+    const domDiff = buildDomDiff(previous.tree, current.tree);
+    const visualDiff = previous.screenshotDataUrl && current.screenshotDataUrl
+      ? buildVisualDiff(previous.screenshotDataUrl, current.screenshotDataUrl)
+      : null;
 
     return {
-      changed: added.length > 0 || removed.length > 0,
-      added: added.slice(0, 100),
-      removed: removed.slice(0, 100),
-      addedCount: added.length,
-      removedCount: removed.length,
+      changed: domDiff.changed || !!visualDiff?.changed || previous.url !== current.url || previous.title !== current.title,
+      domDiff,
+      visualDiff,
+      urlChanged: previous.url !== current.url,
+      titleChanged: previous.title !== current.title,
       previousTimestamp: previous.timestamp,
-      currentTimestamp: _lastSnapshot.timestamp,
+      currentTimestamp: current.timestamp,
     };
   } catch (e) {
     log('error', `page_diff failed: ${e.message}`);
@@ -1651,6 +3076,35 @@ reg('page_diff', async (p) => {
   }
 });
 
+// TOOL REGISTRATION: get_interaction_proof
+// WHAT: Returns the stored screenshot and diff evidence for an observed interaction.
+// WHY: Agents need verifiable evidence when a no-op was detected or a fallback path fired.
+reg('get_interaction_proof', async (p) => {
+  const proofId = p?.proofId;
+  if (!proofId || typeof proofId !== 'string') {
+    return { error: 'proofId is required' };
+  }
+
+  const proof = _interactionProofs.get(proofId);
+  if (!proof) {
+    return { error: `Unknown proofId: ${proofId}` };
+  }
+
+  if (p?.includeArtifacts === false) {
+    return { proof: summarizeProof(proof) };
+  }
+
+  return {
+    proof: {
+      ...summarizeProof(proof),
+      attempts: proof.attempts,
+    },
+  };
+});
+
+// TOOL REGISTRATION: cdp_detach
+// WHAT: Registers the cdp_detach tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('cdp_detach', async (p) => {
   const tabId = p?.tabId || await activeTabId();
   await cdpDetach(tabId);
@@ -1770,6 +3224,9 @@ async function callVision(base64Image, prompt, opts) {
 }
 
 // --- Vision Tool: See the page like a human ---
+// TOOL REGISTRATION: vision
+// WHAT: Registers the vision tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('vision', async (p) => {
   try {
     const tabId = p?.tabId || await activeTabId();
@@ -1825,10 +3282,43 @@ reg('vision', async (p) => {
 });
 
 // --- Vision Click: Find element by description + click via coordinates ---
+// TOOL REGISTRATION: vision_click
+// WHAT: Registers the vision_click tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('vision_click', async (p) => {
   if (!p?.description) return { error: 'description is required (natural language)' };
   try {
     const tabId = p?.tabId || await activeTabId();
+
+    // Deterministic fast-path:
+    // Known button families such as Save / Continue / Submit should bypass the
+    // vision stack entirely when the live accessibility tree already exposes a
+    // single matching interactive ref.
+    if (deterministicPrimitives?.resolveDeterministicRefByDescription) {
+      const { refs, snapshotError } = await buildDeterministicRefsForTab(tabId);
+      const deterministicMatch = deterministicPrimitives.resolveDeterministicRefByDescription(
+        p.description,
+        refs,
+        p.currentUrl || ''
+      );
+
+      if (deterministicMatch?.ref) {
+        const clickResult = await execTool('click_ref', { ref: deterministicMatch.ref });
+        if (!clickResult?.error) {
+          return {
+            ...clickResult,
+            deterministic: true,
+            primitive: deterministicMatch.primitive,
+            resolution: 'ref-fast-path',
+          };
+        }
+
+        log('warn', `vision_click deterministic fast-path failed, falling back to vision: ${clickResult.error}`);
+      } else if (snapshotError) {
+        log('warn', `vision_click could not build deterministic refs: ${snapshotError}`);
+      }
+    }
+
     const vp = await visionViewport(tabId);
     const imgW = Math.round(vp.w * vp.dpr);
     const imgH = Math.round(vp.h * vp.dpr);
@@ -1852,16 +3342,26 @@ reg('vision_click', async (p) => {
 
     if (!result.found) return { success: false, reason: result.reason || 'Element not found by vision' };
 
-    // Convert image pixels → CSS pixels
+    // Convert image pixels → CSS pixels + a small box so the shared pointer
+    // helper can still add movement and jitter without assuming exact center.
     const cssX = Math.round(result.x / vp.dpr);
     const cssY = Math.round(result.y / vp.dpr);
+    const halfWidth = Math.max(8, Math.round(((result.w || 24) / vp.dpr) / 2));
+    const halfHeight = Math.max(8, Math.round(((result.h || 24) / vp.dpr) / 2));
+    const pointerTarget = {
+      x: cssX,
+      y: cssY,
+      bounds: {
+        minX: cssX - halfWidth,
+        maxX: cssX + halfWidth,
+        minY: cssY - halfHeight,
+        maxY: cssY + halfHeight,
+      },
+    };
+    const settledPoint = await humanEntropyClickCdp(tabId, pointerTarget);
 
-    // Click via CDP
-    await cdpSend(tabId, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: cssX, y: cssY, button: 'left', clickCount: 1 });
-    await cdpSend(tabId, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: cssX, y: cssY, button: 'left', clickCount: 1 });
-
-    log('info', `vision_click: (${cssX},${cssY}) — "${result.label}"`);
-    return { success: true, x: cssX, y: cssY, label: result.label, confidence: result.confidence, provider: vision.provider, model: vision.model };
+    log('info', `vision_click: (${settledPoint.x},${settledPoint.y}) — "${result.label}"`);
+    return { success: true, x: settledPoint.x, y: settledPoint.y, label: result.label, confidence: result.confidence, provider: vision.provider, model: vision.model };
   } catch (e) {
     log('error', `vision_click failed: ${e.message}`);
     return { error: e.message };
@@ -1869,6 +3369,9 @@ reg('vision_click', async (p) => {
 });
 
 // --- Vision Type: Find input by description + type text ---
+// TOOL REGISTRATION: vision_type
+// WHAT: Registers the vision_type tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('vision_type', async (p) => {
   if (!p?.description) return { error: 'description is required' };
   if (p?.text == null) return { error: 'text is required' };
@@ -1899,13 +3402,22 @@ reg('vision_type', async (p) => {
 
     const cssX = Math.round(result.x / vp.dpr);
     const cssY = Math.round(result.y / vp.dpr);
+    const halfWidth = Math.max(8, Math.round(((result.w || 24) / vp.dpr) / 2));
+    const halfHeight = Math.max(8, Math.round(((result.h || 24) / vp.dpr) / 2));
+    const pointerTarget = {
+      x: cssX,
+      y: cssY,
+      bounds: {
+        minX: cssX - halfWidth,
+        maxX: cssX + halfWidth,
+        minY: cssY - halfHeight,
+        maxY: cssY + halfHeight,
+      },
+    };
+    const settledPoint = await humanEntropyClickCdp(tabId, pointerTarget);
 
-    // Click to focus
-    await cdpSend(tabId, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: cssX, y: cssY, button: 'left', clickCount: 1 });
-    await cdpSend(tabId, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: cssX, y: cssY, button: 'left', clickCount: 1 });
-
-    // Brief delay for focus
-    await new Promise(r => setTimeout(r, 120));
+    // Brief delay for focus so the subsequent keyboard events do not race the UI.
+    await humanEntropySleep(humanEntropyInt(90, 160));
 
     // Select all + delete (clear existing text) — uses Meta on Mac, Ctrl elsewhere
     const mod = 4; // Meta key for Mac; change to 2 for Ctrl on other platforms
@@ -1917,8 +3429,8 @@ reg('vision_type', async (p) => {
     // Type text
     await cdpSend(tabId, 'Input.insertText', { text: p.text });
 
-    log('info', `vision_type: typed "${p.text.substring(0, 40)}" at (${cssX},${cssY})`);
-    return { success: true, x: cssX, y: cssY, label: result.label, confidence: result.confidence, provider: vision.provider, model: vision.model, typed: p.text };
+    log('info', `vision_type: typed "${p.text.substring(0, 40)}" at (${settledPoint.x},${settledPoint.y})`);
+    return { success: true, x: settledPoint.x, y: settledPoint.y, label: result.label, confidence: result.confidence, provider: vision.provider, model: vision.model, typed: p.text };
   } catch (e) {
     log('error', `vision_type failed: ${e.message}`);
     return { error: e.message };
@@ -1926,6 +3438,9 @@ reg('vision_type', async (p) => {
 });
 
 // --- Vision Extract: OCR-like data extraction from screenshot ---
+// TOOL REGISTRATION: vision_extract
+// WHAT: Registers the vision_extract tool for the MCP Server.
+// WHY: Agents use this to control the browser.
 reg('vision_extract', async (p) => {
   try {
     const tabId = p?.tabId || await activeTabId();
@@ -2030,7 +3545,7 @@ chrome.tabs.onCreated.addListener((tab) => { log('info', `Tab created: ${tab.url
 chrome.tabs.onRemoved.addListener((tabId) => { log('info', `Tab removed: ${tabId}`); });
 
 // --- Keep-Alive Alarm ---
-chrome.alarms.create('keep-alive', { periodInMinutes: 1 });
+chrome.alarms.create('keep-alive', { periodInMinutes: 0.25 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'keep-alive') {
     log('info', 'Keep-alive alarm fired');
@@ -2048,7 +3563,83 @@ chrome.runtime.onInstalled.addListener((d) => log('info', `Installed: ${d.reason
 
 (async () => {
   log('info', `Starting OpenSIN Bridge v${VERSION} — Agent Vision Edition`);
+  await restoreEphemeralState();
   connectToHfMcp();
   await setupOffscreen();
   log('info', `Ready — ${Object.keys(TOOL_REGISTRY).length} tools registered`);
 })();
+
+// ============================================================
+// ISSUES #17, #21, #22, #23, #24: Behavior Timeline Capture
+// ============================================================
+// WHY: We need a unified, privacy-safe, high-performance timeline of user actions.
+// PERFORMANCE (#24): Buffered writes, bounded flush (every 50 events or 5s).
+// STORAGE (#21): IndexedDB is used instead of storage.local for high volume.
+// EXPORT (#23): Uses an rrweb-compatible structured schema.
+
+let timelineBuffer = [];
+const TIMELINE_FLUSH_INTERVAL = 5000;
+const TIMELINE_MAX_BUFFER = 50;
+
+function initIndexedDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('OpenSIN_Behavior_DB', 1);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('sessions')) {
+        db.createObjectStore('sessions', { keyPath: 'sessionId' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function flushTimelineBuffer() {
+  if (timelineBuffer.length === 0 || !behaviorRecordingEnabled) return;
+  const eventsToFlush = [...timelineBuffer];
+  timelineBuffer = [];
+  
+  try {
+    const db = await initIndexedDB();
+    const tx = db.transaction('sessions', 'readwrite');
+    const store = tx.objectStore('sessions');
+    
+    const sessionId = behaviorRecordingScope?.startedAt || Date.now();
+    const req = store.get(sessionId);
+    
+    req.onsuccess = () => {
+      const session = req.result || { sessionId, events: [] };
+      session.events.push(...eventsToFlush);
+      store.put(session);
+    };
+  } catch (e) {
+    log('error', `Timeline flush failed: ${e.message}`);
+  }
+}
+
+setInterval(flushTimelineBuffer, TIMELINE_FLUSH_INTERVAL);
+
+// Handle MAIN-world Network/Behavior events
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!behaviorRecordingEnabled) return false;
+  
+  // Apply Schema validation and Redaction (#20, #29)
+  const validMsg = validateMainWorldMessage({ data: message });
+  if (validMsg && validMsg.payload) {
+    if (validMsg.payload.type === 'INPUT') {
+      validMsg.payload.value = redactSensitiveValue(validMsg.payload.name, validMsg.payload.inputType, validMsg.payload.value);
+    }
+    
+    timelineBuffer.push({
+      timestamp: Date.now(),
+      tabId: sender.tab ? sender.tab.id : null,
+      ...validMsg.payload
+    });
+    
+    if (timelineBuffer.length >= TIMELINE_MAX_BUFFER) {
+      flushTimelineBuffer();
+    }
+  }
+  return false;
+});

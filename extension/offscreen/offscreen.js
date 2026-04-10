@@ -1,4 +1,28 @@
 /**
+ * ==============================================================================
+ * OpenSIN Component: offscreen.js
+ * ==============================================================================
+ * 
+ * DESCRIPTION / BESCHREIBUNG:
+ * Source file for the OpenSIN ecosystem.
+ * 
+ * WHY IT EXISTS / WARUM ES EXISTIERT:
+ * Essential logic for autonomous agent cooperation.
+ * 
+ * RULES / REGELN:
+ * 1. EXTENSIVE LOGGING: Every function call must be traceable.
+ * 2. NO ASSUMPTIONS: Validate all inputs and external states.
+ * 3. SECURITY FIRST: Never leak credentials or session data.
+ * 
+ * CONSEQUENCES / KONSEQUENZEN:
+ * Incorrect modification may disrupt agent communication or task execution.
+ * 
+ * AUTHOR: SIN-Zeus / A2A Fleet
+ * ==============================================================================
+ */
+
+
+/**
  * OpenSIN Bridge v4.0.0 — Offscreen Document Script
  * 
  * Runs in a hidden offscreen document for:

@@ -1,3 +1,35 @@
+/**
+ * ==============================================================================
+ * OpenSIN Component: index.ts
+ * ==============================================================================
+ * 
+ * DESCRIPTION / BESCHREIBUNG:
+ * Source file for the OpenSIN ecosystem.
+ * 
+ * WHY IT EXISTS / WARUM ES EXISTIERT:
+ * Essential logic for autonomous agent cooperation.
+ * 
+ * RULES / REGELN:
+ * 1. EXTENSIVE LOGGING: Every function call must be traceable.
+ * 2. NO ASSUMPTIONS: Validate all inputs and external states.
+ * 3. SECURITY FIRST: Never leak credentials or session data.
+ * 
+ * CONSEQUENCES / KONSEQUENZEN:
+ * Incorrect modification may disrupt agent communication or task execution.
+ * 
+ * AUTHOR: SIN-Zeus / A2A Fleet
+ * ==============================================================================
+ */
+
+
+import '../../extension/shared/deterministic-primitives.js';
+
+// The runtime helper is loaded for side effects so the worker can reuse the same
+// evidence-based deterministic rule set as the extension. We intentionally keep
+// the helper optional because fallback behavior must continue to work even if the
+// import is unavailable in a different runtime packaging mode.
+const deterministicPrimitives = (globalThis as { __OpenSINDeterministicPrimitives?: any }).__OpenSINDeterministicPrimitives || null;
+
 export interface Env {
   SUPABASE_URL: string;
   SUPABASE_SERVICE_KEY: string;
@@ -80,6 +112,18 @@ async function checkSubscription(userId: string, env: Env) {
 // Secret Sauce: The Decision Engine
 async function handleDecide(request: Request, userId: string, env: Env, headers: Record<string, string>) {
   const { dom_snapshot, current_url, context } = await request.json() as any;
+
+  // Deterministic fast-path:
+  // Known button families such as Save / Continue / Submit should not consume an
+  // LLM round-trip when the DOM snapshot already gives us a unique safe target.
+  const deterministicDecision = deterministicPrimitives?.resolveDeterministicButtonAction?.(
+    dom_snapshot,
+    current_url,
+    context?.targetText || context?.description || ''
+  );
+  if (deterministicDecision) {
+    return json(deterministicDecision, 200, headers);
+  }
   
   const systemPrompt = `You are an autonomous browser agent. You receive a DOM snapshot (forms, buttons, links) and current URL.
 Analyze the page state and decide the exact next interaction.
@@ -111,7 +155,20 @@ Think carefully before acting to avoid detection.`;
 
 // Secret Sauce: Persona Engine
 async function handlePersona(request: Request, userId: string, env: Env, headers: Record<string, string>) {
-  const { question_text, options } = await request.json() as any;
+  const { question_text, options, current_url } = await request.json() as any;
+
+  // Deterministic fast-path:
+  // We only short-circuit patterns that have been explicitly proven safe. Every
+  // unknown or ambiguous question still falls through to the adaptive persona
+  // engine below.
+  const deterministicAnswer = deterministicPrimitives?.resolveDeterministicPersonaAnswer?.(
+    question_text,
+    options,
+    current_url || ''
+  );
+  if (deterministicAnswer) {
+    return json(deterministicAnswer, 200, headers);
+  }
 
   // Real persona data would be retrieved securely from Supabase here
   const personaPrompt = `You are a 28-year-old software engineer living in Germany.
