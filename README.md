@@ -133,3 +133,11 @@ The server-side code is trade secret material and must NEVER be published public
 ---
 
 *OpenSIN-AI - Autonomous AI Agent Ecosystem*
+
+---
+
+## 🚨 MISSION CRITICAL MANDATE: NO AUTORUN. NO BLIND CLICKS.
+
+Please see the absolute, top-priority rulebook in [`AGENTS.md`](./AGENTS.md). 
+**ANY automation, script, or agent utilizing this bridge MUST implement the 10-step Vision Gate Loop.**
+Escalating click chains without interim vision checks are strictly **banned**. EVERY SINGLE STAGE must be visually verified.
