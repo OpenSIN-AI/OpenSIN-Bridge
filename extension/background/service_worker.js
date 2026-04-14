@@ -3462,8 +3462,12 @@ reg('vision_extract', async (p) => {
 
 // --- HELPER: Safe Execute with Error Handling ---
 async function activeTabId() {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const id = tabs[0]?.id;
+  let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  let id = tabs[0]?.id;
+  if (id === undefined) {
+    tabs = await chrome.tabs.query({ active: true });
+    id = tabs[0]?.id;
+  }
   if (id === undefined) throw new Error('No active tab found');
   return id;
 }
