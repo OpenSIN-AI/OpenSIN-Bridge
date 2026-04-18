@@ -2,16 +2,28 @@
   "name": "opensin-bridge",
   "version": "1.0.0",
   "private": true,
-  "description": "OpenSIN Bridge — Thin-Client Chrome Extension + Server-Side SaaS Brain",
+  "description": "OpenSIN Bridge \u2014 Thin-Client Chrome Extension + Server-Side SaaS Brain",
   "scripts": {
     "ext:dev": "echo 'Load extension/ folder in chrome://extensions (Developer Mode)'",
-    "ext:package": "cd extension && zip -r ../dist/opensin-bridge-extension.zip . -x '*.DS_Store'",
+    "ext:package": "mkdir -p dist && cd extension && zip -r ../dist/opensin-bridge-extension.zip . -x '*.DS_Store'",
     "server:dev": "wrangler dev server/src/index.ts",
     "deploy:server": "wrangler deploy server/src/index.ts",
     "build": "npm run ext:package && echo 'Server deploys via wrangler'",
-    "test": "echo 'TODO: Add tests'"
+    "test": "npm run test:default",
+    "test:contract": "node scripts/validate-test-contract.mjs",
+    "test:default": "npm run test:contract && node scripts/run-validation.mjs --scope=default",
+    "test:all": "npm run test:contract && node scripts/run-validation.mjs --scope=all",
+    "test:issue": "npm run test:contract && node scripts/run-validation.mjs --scope=issue",
+    "verify:pr": "npm run test:all && npm run build",
+    "issue:worktree": "bash scripts/create_issue_worktree.sh",
+    "verify:issue-scope": "bash scripts/verify_issue_scope.sh"
   },
-  "keywords": ["chrome-extension", "saas", "automation", "opensin"],
+  "keywords": [
+    "chrome-extension",
+    "saas",
+    "automation",
+    "opensin"
+  ],
   "author": "OpenSIN-AI",
   "license": "UNLICENSED"
 }

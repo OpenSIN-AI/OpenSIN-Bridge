@@ -115,6 +115,24 @@ npm run ext:dev
 # Run server locally
 npm run server:dev
 
+# Run the fast default validation contract
+npm test
+
+# Run the full validation surface
+npm run test:all
+
+# Run a single issue regression suite
+npm run test:issue -- --issue=27
+
+# Run the pull-request verification contract
+npm run verify:pr
+
+# Create an isolated issue worktree
+npm run issue:worktree -- --issue 26 --branch feat/worktree-pr-isolation-ops
+
+# Verify that a PR only contains issue-scoped files
+npm run verify:issue-scope -- --issue 26 --branch feat/worktree-pr-isolation-ops --base origin/main --allow README.md --allow docs/ --allow scripts/ --allow package.json
+
 # Build for production
 npm run build
 
@@ -124,6 +142,24 @@ npm run deploy:server
 # Package extension for Chrome Web Store
 npm run ext:package
 ```
+
+## Validation Contract
+
+OpenSIN-Bridge now distinguishes between the fast default test loop, issue-scoped regression suites, and the pull-request verification contract.
+
+- `npm test` / `npm run test:default` = fast local validation
+- `npm run test:issue -- --issue=<number>` = targeted regression coverage for one issue
+- `npm run test:all` = default suite plus every registered issue regression
+- `npm run verify:pr` = review-ready verification before opening or updating a PR
+
+The full policy and suite-registration rules live in [`docs/VALIDATION.md`](docs/VALIDATION.md).
+
+## Issue-Scoped Cloud Execution
+
+Cloud executors must not work from a dirty default checkout. OpenSIN-Bridge now standardizes issue work in dedicated worktrees under `/Users/jeremy/dev/clean-worktrees/` with an explicit PR isolation gate.
+
+- Workflow: [`docs/ISSUE_SCOPED_EXECUTION.md`](docs/ISSUE_SCOPED_EXECUTION.md)
+- Review checklist: [`docs/PR_ISOLATION_CHECKLIST.md`](docs/PR_ISOLATION_CHECKLIST.md)
 
 ## License
 
