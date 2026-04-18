@@ -52,29 +52,27 @@
 
 /**
  * OpenSIN Bridge v4.0.0 — Content Script Injector
- * Runs on <all_urls> at document_start in MAIN world
+ * Runs on <all_urls> at document_start in MAIN world.
  *
- * This is the OpenSIN content script that:
- * - Injects the SIN API into every page's window object
- * - Listens for commands from the background service worker
- * - Provides DOM-level automation capabilities
- * - Bypasses CSP by running in MAIN world
+ * This file intentionally lives in the page's MAIN world because network payload
+ * correlation only works reliably when fetch/XHR are patched before application
+ * code captures the original browser primitives.
  *
- * SECURITY: All mutating methods are nonce-gated. Only code that
- * knows the per-page nonce (retrieved via chrome.scripting.executeScript)
- * can invoke click/type/fillForm/etc. Read-only methods remain open.
+ * SECURITY: All mutating bridge methods remain nonce-gated. Network interception
+ * is passive/read-only and emits bounded, privacy-aware events back to the
+ * extension runtime for downstream correlation and export.
  */
 
 (function() {
   'use strict';
 
-  // Prevent double-injection because duplicate bridge objects would create
-  // conflicting nonces and inconsistent DOM helper behavior across the page.
+  // Prevent double-injection because duplicate wrappers would produce duplicate
+  // network events and would also overwrite the per-page nonce contract.
   if (window.__SIN_BRIDGE_INJECTED__) return;
   window.__SIN_BRIDGE_INJECTED__ = true;
 
-  // Per-page nonce — generated fresh on every injection so mutating methods can
-  // be gated without exposing a predictable token to the page context.
+  // Per-page nonce — generated fresh on every injection so mutating bridge
+  // methods cannot be invoked by guessing a stable token.
   const _sinNonce = crypto.randomUUID();
   const BRIDGE_VERSION = typeof chrome !== 'undefined' && chrome.runtime?.getManifest
     ? chrome.runtime.getManifest().version
@@ -94,18 +92,16 @@
     navigations: new Map(),
   };
 
-  // Poll interval used by waitFor(). Polling is more robust than a single
-  // document-root MutationObserver because shadow roots and iframe documents can
-  // appear later and may not be reachable from one observer chain.
-  const WAIT_FOR_POLL_INTERVAL_MS = 100;
+  // Hard bounds keep payload previews deterministic and stop the bridge from
+  // copying arbitrarily large request/response bodies into extension memory.
+  const MAX_BODY_PREVIEW_LENGTH = 2048;
+  const MAX_HEADER_VALUE_LENGTH = 512;
 
-  // Hard cap for text snippets returned in snapshots so the bridge remains fast
-  // and avoids copying arbitrarily large DOM text blobs into the transport layer.
-  const SNAPSHOT_TEXT_LIMIT = 50;
-
-  // The deterministic helper is optional because some local experiments inject
-  // this file directly without the manifest-managed preload sequence.
-  const deterministicPrimitives = globalThis.__OpenSINDeterministicPrimitives || null;
+  // Manual subscribers keep the old bridge API contract alive. Existing callers
+  // can still register callbacks through interceptFetch()/interceptXHR() without
+  // replacing the new automatic MAIN-world capture path.
+  const fetchSubscribers = [];
+  const xhrSubscribers = [];
 
   // Poll interval used by waitFor(). Polling is more robust than a single
   // document-root MutationObserver because shadow roots and iframe documents can
@@ -121,282 +117,406 @@
   }
 
   /**
-   * Normalize any DOM-like root into a queryable root.
+   * Clamp any value into a bounded string preview.
    *
-   * Supported roots in real browsers are Document, Element, and ShadowRoot.
-   * Tests may provide minimal DOM-like objects; therefore we rely on capability
-   * checks instead of constructor checks.
+   * The export pipeline needs representative snippets, not full binary uploads or
+   * giant JSON documents. Truncation happens here so every downstream consumer
+   * receives the same deterministic payload shape.
    */
-  function normalizeRoot(root) {
-    if (root && typeof root.querySelectorAll === 'function') return root;
-    return document;
+  function clampPreview(value, limit = MAX_BODY_PREVIEW_LENGTH) {
+    if (value == null) return '';
+    return String(value).slice(0, limit);
   }
 
   /**
-   * Safely determine whether an element is visible enough to be actionable.
-   *
-   * We preserve the old offsetParent behavior for backward compatibility, but we
-   * also accept getClientRects() as a fallback because some visible elements in
-   * shadow DOM / fixed-position layouts legitimately have offsetParent === null.
+   * Normalize URLs from Request objects, URL objects, or raw strings.
    */
-  function isElementVisible(element) {
-    if (!element) return false;
+  function normalizeUrl(input) {
+    if (typeof input === 'string') return input;
+    if (input && typeof input.url === 'string') return input.url;
+    if (input && typeof input.href === 'string') return input.href;
+    return String(input || '');
+  }
 
-    try {
-      if (element.offsetParent !== null) return true;
-    } catch (error) {
-      // Ignore offsetParent failures and continue with geometric visibility.
+  /**
+   * Convert headers-like inputs into a plain JSON-safe object.
+   */
+  function normalizeHeaders(headers) {
+    if (!headers) return {};
+
+    if (typeof headers.entries === 'function') {
+      return Object.fromEntries(
+        Array.from(headers.entries()).map(([key, value]) => [key, clampPreview(value, MAX_HEADER_VALUE_LENGTH)])
+      );
+    }
+
+    if (Array.isArray(headers)) {
+      return Object.fromEntries(
+        headers.map(([key, value]) => [String(key), clampPreview(value, MAX_HEADER_VALUE_LENGTH)])
+      );
+    }
+
+    if (typeof headers === 'object') {
+      return Object.fromEntries(
+        Object.entries(headers).map(([key, value]) => [key, clampPreview(value, MAX_HEADER_VALUE_LENGTH)])
+      );
+    }
+
+    return {};
+  }
+
+  /**
+   * Classify request/response bodies into a coarse, privacy-aware bucket.
+   *
+   * Downstream tooling only needs enough information to correlate intent. It does
+   * not need raw binary blobs or browser-specific body classes.
+   */
+  function classifyBody(value) {
+    if (value == null) return { bodyKind: null, bodyLength: 0, bodyPreview: '' };
+
+    if (typeof value === 'string') {
+      return { bodyKind: 'text', bodyLength: value.length, bodyPreview: clampPreview(value) };
+    }
+
+    if (typeof URLSearchParams !== 'undefined' && value instanceof URLSearchParams) {
+      const serialized = value.toString();
+      return { bodyKind: 'urlencoded', bodyLength: serialized.length, bodyPreview: clampPreview(serialized) };
+    }
+
+    if (typeof FormData !== 'undefined' && value instanceof FormData) {
+      const entries = [];
+      for (const [key, entryValue] of value.entries()) {
+        entries.push([key, typeof entryValue === 'string' ? clampPreview(entryValue, 128) : '[binary]']);
+      }
+      const serialized = JSON.stringify(entries);
+      return { bodyKind: 'form-data', bodyLength: serialized.length, bodyPreview: clampPreview(serialized) };
+    }
+
+    if (typeof Blob !== 'undefined' && value instanceof Blob) {
+      return { bodyKind: 'blob', bodyLength: value.size || 0, bodyPreview: `[blob:${value.type || 'application/octet-stream'}]` };
+    }
+
+    if (typeof ArrayBuffer !== 'undefined' && value instanceof ArrayBuffer) {
+      return { bodyKind: 'array-buffer', bodyLength: value.byteLength || 0, bodyPreview: '[array-buffer]' };
+    }
+
+    if (typeof value === 'object') {
+      const serialized = JSON.stringify(value);
+      return { bodyKind: 'json', bodyLength: serialized.length, bodyPreview: clampPreview(serialized) };
+    }
+
+    return { bodyKind: typeof value, bodyLength: String(value).length, bodyPreview: clampPreview(value) };
+  }
+
+  /**
+   * Read a Request body without consuming the live request instance.
+   *
+   * Browsers allow Request.clone() for this exact use-case. If cloning or text()
+   * fails we return an explicit placeholder instead of guessing at hidden bytes.
+   */
+  async function readRequestBodyPreview(input, init) {
+    if (init && Object.prototype.hasOwnProperty.call(init, 'body')) {
+      return classifyBody(init.body);
+    }
+
+    if (input && typeof input.clone === 'function') {
+      try {
+        const clone = input.clone();
+        if (typeof clone.text === 'function') {
+          const text = await clone.text();
+          return classifyBody(text);
+        }
+      } catch (_error) {
+        return { bodyKind: 'unavailable', bodyLength: null, bodyPreview: '[request-body-unavailable]' };
+      }
+    }
+
+    return { bodyKind: null, bodyLength: 0, bodyPreview: '' };
+  }
+
+  /**
+   * Read a Response body preview without preventing application code from using it.
+   */
+  async function readResponseBodyPreview(response) {
+    if (!response || typeof response.clone !== 'function') {
+      return { bodyKind: null, bodyLength: 0, bodyPreview: '' };
     }
 
     try {
-      if (typeof element.getClientRects === 'function' && element.getClientRects().length > 0) {
-        return true;
+      const clone = response.clone();
+      if (typeof clone.text !== 'function') {
+        return { bodyKind: null, bodyLength: 0, bodyPreview: '' };
       }
-    } catch (error) {
-      // Ignore geometry failures and report not visible below.
+      const text = await clone.text();
+      return classifyBody(text);
+    } catch (_error) {
+      return { bodyKind: 'unavailable', bodyLength: null, bodyPreview: '[response-body-unavailable]' };
+    }
+  }
+
+  /**
+   * Emit a MAIN-world network event to the service worker.
+   *
+   * The message structure intentionally mirrors the service worker validator so a
+   * hostile page cannot smuggle arbitrary message types through this channel.
+   */
+  function postNetworkEvent(payload) {
+    if (!chrome || !chrome.runtime || typeof chrome.runtime.sendMessage !== 'function') {
+      return;
     }
 
-    return false;
-  }
-
-  /**
-   * Small helper to produce stable, short text snippets for snapshots and debug
-   * payloads. The bridge needs representative text, not full page dumps.
-   */
-  function truncateText(value, limit = SNAPSHOT_TEXT_LIMIT) {
-    return String(value || '').trim().slice(0, limit);
-  }
-
-  /**
-   * Build a human-readable location label describing where an element was found.
-   *
-   * This is intentionally descriptive rather than CSS-selector-precise. The goal
-   * is to tell operators whether an element came from the main document, a shadow
-   * root, or a same-origin iframe without creating brittle selector strings.
-   */
-  function buildLocationLabel(trail) {
-    if (!Array.isArray(trail) || trail.length === 0) return 'document';
-    return trail.join(' > ');
-  }
-
-  /**
-   * Get same-origin iframe/frame document if accessible.
-   *
-   * Cross-origin frames throw on access in real browsers. We catch that and turn
-   * it into explicit limitation metadata so the snapshot can explain what was
-   * skipped instead of silently pretending the DOM is complete.
-   */
-  function getAccessibleFrameDocument(frameElement, limitations) {
     try {
-      const frameDocument = frameElement.contentDocument || null;
-      if (!frameDocument) {
-        limitations.push({
-          type: 'iframe-unavailable',
-          location: frameElement.src || '(inline frame)',
-          reason: 'Frame document is not yet available.',
-        });
-        return null;
-      }
-      return frameDocument;
-    } catch (error) {
-      limitations.push({
-        type: 'iframe-cross-origin',
-        location: frameElement.src || '(inline frame)',
-        reason: error && error.message ? error.message : 'Cross-origin iframe access denied.',
+      chrome.runtime.sendMessage({
+        _sinBridgeType: 'NETWORK_EVENT',
+        payload,
       });
-      return null;
+    } catch (_error) {
+      // MAIN-world capture must never break page execution because messaging is a
+      // side-channel for correlation, not part of the page's functional path.
     }
   }
 
   /**
-   * Walk every reachable, same-origin DOM surface below the provided root.
-   *
-   * Reachable means:
-   * - the light DOM of the starting root
-   * - any open shadow roots attached to descendants
-   * - any same-origin iframe/frame documents reachable from descendants
-   *
-   * Non-reachable surfaces are reported via limitation metadata:
-   * - closed shadow roots cannot be traversed from page JS by design
-   * - cross-origin iframe documents are blocked by the browser security model
+   * Notify legacy manual subscribers without coupling them to the runtime bridge.
    */
-  function collectDeepElements(root) {
-    const normalizedRoot = normalizeRoot(root);
-    const elements = [];
-    const limitations = [];
-    const visitedRoots = new Set();
-    const visitedElements = new Set();
-
-    function visitRoot(currentRoot, trail) {
-      if (!currentRoot || visitedRoots.has(currentRoot)) return;
-      visitedRoots.add(currentRoot);
-
-      let descendants = [];
+  function notifySubscribers(subscribers, event) {
+    for (const callback of subscribers) {
       try {
-        descendants = Array.from(currentRoot.querySelectorAll('*'));
-      } catch (error) {
-        limitations.push({
-          type: 'root-query-failed',
-          location: buildLocationLabel(trail),
-          reason: error && error.message ? error.message : 'Unable to query this DOM root.',
-        });
-        return;
-      }
-
-      for (const element of descendants) {
-        if (!visitedElements.has(element)) {
-          visitedElements.add(element);
-          elements.push({
-            element,
-            location: buildLocationLabel(trail),
-          });
-        }
-
-        if (element.shadowRoot) {
-          const shadowTrail = trail.concat(`${element.tagName.toLowerCase()}::shadow`);
-          visitRoot(element.shadowRoot, shadowTrail);
-        }
-
-        const tagName = typeof element.tagName === 'string' ? element.tagName.toLowerCase() : '';
-        if (tagName === 'iframe' || tagName === 'frame') {
-          const frameDocument = getAccessibleFrameDocument(element, limitations);
-          if (frameDocument) {
-            const frameLabel = element.id
-              ? `${tagName}#${element.id}`
-              : `${tagName}[src="${element.getAttribute && element.getAttribute('src') ? element.getAttribute('src') : element.src || ''}"]`;
-            visitRoot(frameDocument, trail.concat(frameLabel));
-          }
-        }
+        callback(event);
+      } catch (_error) {
+        // Subscriber failures are isolated so one observer cannot break another.
       }
     }
-
-    visitRoot(normalizedRoot, ['document']);
-
-    return { elements, limitations };
   }
 
   /**
-   * Find the first reachable element matching a selector across light DOM,
-   * nested open shadow roots, and same-origin iframe documents.
+   * Generate a stable request identifier that survives request/response pairing.
    */
-  function deepQuery(selector, root) {
-    if (!selector || typeof selector !== 'string') return null;
+  function createRequestId(prefix) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  }
 
-    const { elements } = collectDeepElements(root);
-    for (const entry of elements) {
+  /**
+   * Fetch interception must be installed in MAIN world at document_start so page
+   * code cannot capture the original fetch reference before we wrap it.
+   */
+  function installFetchInterceptor() {
+    const fetchTarget = typeof window.fetch === 'function' ? window.fetch : globalThis.fetch;
+    if (fetchTarget && fetchTarget.__opensinNetworkWrapped__) return;
+    const originalFetch = fetchTarget;
+    if (typeof originalFetch !== 'function') return;
+
+    const wrappedFetch = async function(input, init) {
+      const startedAt = Date.now();
+      const requestId = createRequestId('fetch');
+      const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+      const url = normalizeUrl(input);
+      const requestBody = await readRequestBodyPreview(input, init);
+      const requestHeaders = normalizeHeaders((init && init.headers) || (input && input.headers) || null);
+
+      const requestEvent = {
+        api: 'fetch',
+        phase: 'request',
+        requestId,
+        method,
+        url,
+        timestamp: startedAt,
+        frameUrl: window.location.href,
+        request: {
+          ...requestBody,
+          headers: requestHeaders,
+        },
+      };
+
+      postNetworkEvent(requestEvent);
+      notifySubscribers(fetchSubscribers, requestEvent);
+
       try {
-        if (typeof entry.element.matches === 'function' && entry.element.matches(selector)) {
-          return entry.element;
-        }
+        const response = await originalFetch.apply(this, arguments);
+        const responseBody = await readResponseBodyPreview(response);
+        const responseEvent = {
+          api: 'fetch',
+          phase: 'response',
+          requestId,
+          method,
+          url,
+          timestamp: Date.now(),
+          durationMs: Date.now() - startedAt,
+          frameUrl: window.location.href,
+          request: {
+            ...requestBody,
+            headers: requestHeaders,
+          },
+          response: {
+            status: typeof response.status === 'number' ? response.status : null,
+            ok: typeof response.ok === 'boolean' ? response.ok : null,
+            statusText: response.statusText || null,
+            headers: normalizeHeaders(response.headers),
+            ...responseBody,
+          },
+        };
+
+        postNetworkEvent(responseEvent);
+        notifySubscribers(fetchSubscribers, responseEvent);
+        return response;
       } catch (error) {
-        // Invalid selectors should behave like native querySelector and bubble.
+        const errorEvent = {
+          api: 'fetch',
+          phase: 'error',
+          requestId,
+          method,
+          url,
+          timestamp: Date.now(),
+          durationMs: Date.now() - startedAt,
+          frameUrl: window.location.href,
+          request: {
+            ...requestBody,
+            headers: requestHeaders,
+          },
+          error: {
+            message: error && error.message ? error.message : 'Fetch failed',
+            name: error && error.name ? error.name : 'Error',
+          },
+        };
+
+        postNetworkEvent(errorEvent);
+        notifySubscribers(fetchSubscribers, errorEvent);
         throw error;
       }
-    }
-
-    return null;
-  }
-
-  /**
-   * Find all reachable elements matching a selector across light DOM, open
-   * shadow roots, and same-origin iframe documents.
-   */
-  function deepQueryAll(selector, root) {
-    if (!selector || typeof selector !== 'string') return [];
-
-    const matches = [];
-    const { elements } = collectDeepElements(root);
-    for (const entry of elements) {
-      try {
-        if (typeof entry.element.matches === 'function' && entry.element.matches(selector)) {
-          matches.push(entry.element);
-        }
-      } catch (error) {
-        throw error;
-      }
-    }
-
-    return matches;
-  }
-
-  /**
-   * Like deepQueryAll(), but preserves discovery metadata for snapshots.
-   */
-  function deepDiscover(selector, root) {
-    if (!selector || typeof selector !== 'string') {
-      return { matches: [], limitations: [] };
-    }
-
-    const matches = [];
-    const { elements, limitations } = collectDeepElements(root);
-    for (const entry of elements) {
-      try {
-        if (typeof entry.element.matches === 'function' && entry.element.matches(selector)) {
-          matches.push(entry);
-        }
-      } catch (error) {
-        throw error;
-      }
-    }
-
-    return { matches, limitations };
-  }
-
-  /**
-   * Create a snapshot of the visible actionable page state.
-   *
-   * This snapshot now includes actionable elements from:
-   * - the main document
-   * - nested open shadow roots
-   * - same-origin iframes/frames
-   *
-   * It does NOT include closed shadow roots because browsers intentionally hide
-   * them from page JavaScript. That limitation is documented, not guessed away.
-   */
-  function buildSnapshot() {
-    const linkDiscovery = deepDiscover('a[href]');
-    const inputDiscovery = deepDiscover('input, textarea, select');
-    const buttonDiscovery = deepDiscover('button, [role="button"], input[type="submit"]');
-
-    const limitations = Array.from(new Map(
-      [
-        ...linkDiscovery.limitations,
-        ...inputDiscovery.limitations,
-        ...buttonDiscovery.limitations,
-      ].map((entry) => [`${entry.type}:${entry.location}:${entry.reason}`, entry])
-    ).values());
-
-    return {
-      title: document.title,
-      url: window.location.href,
-      readyState: document.readyState,
-      links: linkDiscovery.matches.map(({ element, location }) => ({
-        href: element.href,
-        text: truncateText(element.textContent),
-        location,
-      })),
-      inputs: inputDiscovery.matches.map(({ element, location }) => ({
-        tag: element.tagName.toLowerCase(),
-        type: element.type,
-        name: element.name,
-        id: element.id,
-        placeholder: element.placeholder,
-        visible: isElementVisible(element),
-        location,
-      })),
-      buttons: buttonDiscovery.matches.map(({ element, location }) => ({
-        text: truncateText(element.textContent || element.value),
-        visible: isElementVisible(element),
-        location,
-      })),
-      limitations,
-      notes: [
-        'Open shadow roots are traversed recursively.',
-        'Closed shadow roots remain inaccessible to page JavaScript and are therefore excluded.',
-        'Only same-origin iframe/frame documents are traversed. Cross-origin frames are reported in limitations.',
-      ],
     };
+
+    wrappedFetch.__opensinNetworkWrapped__ = true;
+    wrappedFetch.__opensinOriginalFetch__ = originalFetch;
+    window.fetch = wrappedFetch;
+    globalThis.fetch = wrappedFetch;
   }
+
+  /**
+   * XHR interception complements fetch interception because many legacy sites still
+   * use XMLHttpRequest directly, especially inside older frameworks.
+   */
+  function installXhrInterceptor() {
+    const xhrConstructor = window.XMLHttpRequest || globalThis.XMLHttpRequest;
+    if (!xhrConstructor || xhrConstructor.prototype.__opensinNetworkWrapped__) return;
+
+    const xhrProto = xhrConstructor.prototype;
+    const originalOpen = xhrProto.open;
+    const originalSend = xhrProto.send;
+    const originalSetRequestHeader = xhrProto.setRequestHeader;
+
+    xhrProto.open = function(method, url) {
+      this.__opensinRequestMethod = String(method || 'GET').toUpperCase();
+      this.__opensinRequestUrl = normalizeUrl(url);
+      this.__opensinRequestHeaders = {};
+      this.__opensinRequestId = createRequestId('xhr');
+      return originalOpen.apply(this, arguments);
+    };
+
+    if (typeof originalSetRequestHeader === 'function') {
+      xhrProto.setRequestHeader = function(name, value) {
+        this.__opensinRequestHeaders = this.__opensinRequestHeaders || {};
+        this.__opensinRequestHeaders[name] = value;
+        return originalSetRequestHeader.apply(this, arguments);
+      };
+    }
+
+    xhrProto.send = function(body) {
+      const xhr = this;
+      const startedAt = Date.now();
+      const requestBody = classifyBody(body);
+      const method = xhr.__opensinRequestMethod || 'GET';
+      const url = xhr.__opensinRequestUrl || '';
+      const requestId = xhr.__opensinRequestId || createRequestId('xhr');
+
+      const requestEvent = {
+        api: 'xhr',
+        phase: 'request',
+        requestId,
+        method,
+        url,
+        timestamp: startedAt,
+        frameUrl: window.location.href,
+        request: {
+          ...requestBody,
+          headers: normalizeHeaders(xhr.__opensinRequestHeaders),
+        },
+      };
+
+      postNetworkEvent(requestEvent);
+      notifySubscribers(xhrSubscribers, requestEvent);
+
+      function emitTerminalEvent(phase, extra = {}) {
+        const event = {
+          api: 'xhr',
+          phase,
+          requestId,
+          method,
+          url,
+          timestamp: Date.now(),
+          durationMs: Date.now() - startedAt,
+          frameUrl: window.location.href,
+          request: {
+            ...requestBody,
+            headers: normalizeHeaders(xhr.__opensinRequestHeaders),
+          },
+          ...extra,
+        };
+
+        postNetworkEvent(event);
+        notifySubscribers(xhrSubscribers, event);
+      }
+
+      xhr.addEventListener('load', function() {
+        emitTerminalEvent('response', {
+          response: {
+            status: typeof xhr.status === 'number' ? xhr.status : null,
+            ok: typeof xhr.status === 'number' ? xhr.status >= 200 && xhr.status < 400 : null,
+            statusText: xhr.statusText || null,
+            headers: {},
+            ...classifyBody(typeof xhr.responseText === 'string' ? xhr.responseText : ''),
+          },
+        });
+      });
+
+      xhr.addEventListener('error', function() {
+        emitTerminalEvent('error', {
+          error: {
+            message: 'XMLHttpRequest failed',
+            name: 'XMLHttpRequestError',
+          },
+        });
+      });
+
+      xhr.addEventListener('abort', function() {
+        emitTerminalEvent('error', {
+          error: {
+            message: 'XMLHttpRequest aborted',
+            name: 'XMLHttpRequestAbort',
+          },
+        });
+      });
+
+      xhr.addEventListener('timeout', function() {
+        emitTerminalEvent('error', {
+          error: {
+            message: 'XMLHttpRequest timed out',
+            name: 'XMLHttpRequestTimeout',
+          },
+        });
+      });
+
+      return originalSend.apply(this, arguments);
+    };
+
+    xhrProto.__opensinNetworkWrapped__ = true;
+    window.XMLHttpRequest = xhrConstructor;
+    globalThis.XMLHttpRequest = xhrConstructor;
+  }
+
+  // Install passive network capture immediately so application code on the page
+  // is observed from the earliest safe moment after document_start injection.
+  installFetchInterceptor();
+  installXhrInterceptor();
 
   // ============================================================
   // SIN API — Injected into page context (MAIN world)
@@ -406,15 +526,15 @@
     : '4.0.0';
 
   window.__SIN_BRIDGE__ = {
-    version: BRIDGE_VERSION,
+    version: '4.0.0',
     injected: true,
     timestamp: Date.now(),
     url: window.location.href,
 
     // ---- Read-only methods (safe, no nonce needed) ----
 
-    // DOM Query helpers now pierce reachable open shadow roots and same-origin
-    // iframe documents so agents see the same actionable surface as snapshots.
+    // DOM Query helpers intentionally remain simple here. The feature task in
+    // this branch is about network correlation rather than discovery semantics.
     $(selector, context) {
       return deepQuery(selector, context);
     },
@@ -422,12 +542,32 @@
       return deepQueryAll(selector, context);
     },
 
-    // Get page snapshot.
+    // Get page snapshot for lightweight correlation with network activity.
     snapshot() {
-      return buildSnapshot();
+      return {
+        title: document.title,
+        url: window.location.href,
+        readyState: document.readyState,
+        links: Array.from(document.querySelectorAll('a[href]')).map(a => ({
+          href: a.href,
+          text: (a.textContent || '').trim().slice(0, 50),
+        })),
+        inputs: Array.from(document.querySelectorAll('input, textarea, select')).map(el => ({
+          tag: el.tagName.toLowerCase(),
+          type: el.type,
+          name: el.name,
+          id: el.id,
+          placeholder: el.placeholder,
+          visible: el.offsetParent !== null,
+        })),
+        buttons: Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]')).map(el => ({
+          text: (el.textContent || el.value || '').trim().slice(0, 50),
+          visible: el.offsetParent !== null,
+        })),
+      };
     },
 
-    // Get computed styles.
+    // Get computed styles for verification-oriented tooling.
     getStyles(selector) {
       const el = deepQuery(selector);
       if (!el) return { found: false };
@@ -444,7 +584,8 @@
 
     // ---- Mutating methods (nonce required) ----
 
-    // Click with full event chain (React-compatible).
+    // Click with full event chain so React/Vue handlers see the same sequence as
+    // a real user interaction.
     click(nonce, selector) {
       requireNonce(nonce);
       const el = deepQuery(selector);
@@ -455,7 +596,7 @@
       return { found: true, tag: el.tagName, text: truncateText(el.textContent, 100) };
     },
 
-    // Type text with proper events.
+    // Type text with proper events so framework-controlled inputs stay in sync.
     type(nonce, selector, text, clear = true) {
       requireNonce(nonce);
       if (!selector || typeof selector !== 'string') return { error: 'selector required' };
@@ -468,7 +609,6 @@
         element.value = '';
         element.dispatchEvent(new Event('input', { bubbles: true }));
       }
-      // Simulate typing character by character for realism.
       for (const char of text) {
         element.value += char;
         element.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
@@ -480,59 +620,49 @@
       return { found: true, length: text.length };
     },
 
-    // Wait for element.
+    // Wait for element via MutationObserver because the DOM may change after the
+    // initial document_start injection has already completed.
     waitFor(nonce, selector, timeout = 10000) {
       requireNonce(nonce);
       return new Promise((resolve) => {
-        const startedAt = Date.now();
-
-        function check() {
-          const el = deepQuery(selector);
-          if (el) {
-            return resolve({ found: true, tag: el.tagName });
+        const el = document.querySelector(selector);
+        if (el) return resolve({ found: true, tag: el.tagName });
+        const observer = new MutationObserver(() => {
+          const next = document.querySelector(selector);
+          if (next) {
+            observer.disconnect();
+            resolve({ found: true, tag: next.tagName });
           }
-
-          if (Date.now() - startedAt >= timeout) {
-            return resolve({ found: false });
-          }
-
-          setTimeout(check, WAIT_FOR_POLL_INTERVAL_MS);
-        }
-
-        check();
+        });
+        observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+        setTimeout(() => {
+          observer.disconnect();
+          resolve({ found: false });
+        }, timeout);
       });
     },
 
-    // Override fetch to monitor network.
+    // Legacy bridge API: register an observer for fetch events without replacing
+    // the automatic MAIN-world wrapper introduced for network correlation.
     interceptFetch(nonce, callback) {
       requireNonce(nonce);
-      const originalFetch = window.fetch;
-      window.fetch = async function(...args) {
-        const response = await originalFetch.apply(this, args);
-        if (callback) callback({ url: args[0], status: response.status, method: 'GET' });
-        return response;
-      };
-      return { intercepted: true };
+      if (typeof callback === 'function') {
+        fetchSubscribers.push(callback);
+      }
+      return { intercepted: true, mode: 'subscriber', subscribers: fetchSubscribers.length };
     },
 
-    // Override XMLHttpRequest.
+    // Legacy bridge API: register an observer for XHR events without removing the
+    // passive capture wrapper that is already installed at document_start.
     interceptXHR(nonce, callback) {
       requireNonce(nonce);
-      const originalOpen = XMLHttpRequest.prototype.open;
-      const originalSend = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.open = function(method, url) {
-        this._sin_method = method;
-        this._sin_url = url;
-        return originalOpen.apply(this, arguments);
-      };
-      XMLHttpRequest.prototype.send = function(body) {
-        if (callback) callback({ url: this._sin_url, method: this._sin_method, body });
-        return originalSend.apply(this, arguments);
-      };
-      return { intercepted: true };
+      if (typeof callback === 'function') {
+        xhrSubscribers.push(callback);
+      }
+      return { intercepted: true, mode: 'subscriber', subscribers: xhrSubscribers.length };
     },
 
-    // Anti-detection: remove automation indicators.
+    // Anti-detection helper kept intact because many existing workflows expect it.
     stealth(nonce) {
       requireNonce(nonce);
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
@@ -549,7 +679,7 @@
       return { stealth: true };
     },
 
-    // Form auto-fill.
+    // Form auto-fill stays nonce-gated because it mutates page state.
     fillForm(nonce, data) {
       requireNonce(nonce);
       if (!data || typeof data !== 'object' || Array.isArray(data)) return { error: 'data must be an object' };
@@ -580,7 +710,8 @@
       return results;
     },
 
-    // Scroll to element.
+    // Scroll helper remains intentionally minimal because scrolling itself is not
+    // the feature under change in this branch.
     scrollTo(nonce, selector) {
       requireNonce(nonce);
       const el = deepQuery(selector);
@@ -590,8 +721,8 @@
     },
   };
 
-  // Nonce accessible via Symbol (invisible to normal enumeration —
-  // Object.keys/for..in won't reveal it, only Symbol.for() lookup).
+  // The nonce stays hidden behind a shared symbol so privileged bridge code can
+  // retrieve it while ordinary property enumeration does not expose it.
   const _sinNonceKey = Symbol.for('__SIN_BRIDGE_NONCE__');
   Object.defineProperty(window.__SIN_BRIDGE__, _sinNonceKey, {
     value: _sinNonce,
@@ -599,41 +730,4 @@
     enumerable: false,
     configurable: false,
   });
-
-  /**
-   * Public compatibility helpers kept on window because older integration code
-   * may still call these directly instead of going through __SIN_BRIDGE__.
-   */
-  window._sinDeepQuery = function(selector, root) {
-    return deepQuery(selector, root);
-  };
-
-  window._sinDeepQueryAll = function(selector, root) {
-    return deepQueryAll(selector, root);
-  };
-
-  /**
-   * Human entropy clicking helper retained as a compatibility surface.
-   */
-  window._sinHumanClick = async function(element) {
-    if (!element) return { error: 'Element not found' };
-
-    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    await new Promise((resolve) => setTimeout(resolve, 300 + Math.random() * 200));
-
-    const rect = element.getBoundingClientRect();
-    const x = rect.left + (rect.width / 2) + (Math.random() * 10 - 5);
-    const y = rect.top + (rect.height / 2) + (Math.random() * 10 - 5);
-
-    element.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y, isTrusted: true }));
-    await new Promise((resolve) => setTimeout(resolve, 20 + Math.random() * 50));
-
-    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
-    await new Promise((resolve) => setTimeout(resolve, 60 + Math.random() * 80));
-
-    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
-    element.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
-
-    return { success: true, entropy_applied: true, x, y };
-  };
 })();

@@ -1,4 +1,4 @@
-import { createBehaviorTimelineStore } from './behavior_timeline_store.mjs';
+import { buildSessionExport } from '../shared/session-export.mjs';
 
 let offscreenReady = false;
 // Shared deterministic primitive helpers are loaded as a side-effect module so
@@ -21,62 +21,24 @@ const HF_RECONNECT_DELAY = 1000;
 let recentLogs = [];
 const MAX_LOGS = 50;
 
-// ============================================================
-// ISSUE #28: MV3 Keep-Alive — Ephemeral State via storage.session
-// ============================================================
-// WHY: Chrome MV3 service workers are killed after ~30s inactivity.
-// All in-memory Maps (CURRENT_TAB_ID, active sessions, ref map) are wiped.
-// chrome.storage.session survives SW restarts AND is faster than storage.local.
-// USAGE: call persistEphemeralState() after mutating critical runtime state.
-// Call restoreEphemeralState() during init to recover from a SW restart.
+// MAIN-world message types are intentionally allow-listed. The injector runs in
+// page context, so the service worker must reject every unexpected message shape
+// instead of trusting arbitrary postMessage-like payloads.
+const ALLOWED_MAIN_WORLD_MSG_TYPES = new Set(['NETWORK_EVENT']);
+const mainWorldNetworkLog = [];
+const MAX_MAIN_WORLD_NETWORK_LOG = 500;
 
-async function persistEphemeralState(patch = {}) {
-  try {
-    const current = await chrome.storage.session.get(['_sin_sw_state']);
-    const prev = current['_sin_sw_state'] || {};
-    await chrome.storage.session.set({ '_sin_sw_state': { ...prev, ...patch, ts: Date.now() } });
-  } catch (e) {
-    log('warn', `persistEphemeralState failed: ${e.message}`);
-  }
+function validateMainWorldMessage(message) {
+  if (!message || typeof message !== 'object') return null;
+  if (!ALLOWED_MAIN_WORLD_MSG_TYPES.has(message._sinBridgeType)) return null;
+  if (!message.payload || typeof message.payload !== 'object') return null;
+  return message;
 }
 
-async function restoreEphemeralState() {
-  try {
-    const data = await chrome.storage.session.get(['_sin_sw_state']);
-    const state = data['_sin_sw_state'];
-    if (state) {
-      log('info', `Restored ephemeral SW state from storage.session (age: ${Date.now() - state.ts}ms)`);
-    }
-    return state || {};
-  } catch (e) {
-    log('warn', `restoreEphemeralState failed: ${e.message}`);
-    return {};
-  }
+function pushBounded(list, entry, limit) {
+  list.push(entry);
+  if (list.length > limit) list.shift();
 }
-
-// ============================================================
-// ISSUE #29: MAIN-World postMessage Security Schema Validation
-// ============================================================
-// WHY: MAIN-world injected scripts run in the page's JS context.
-// Hostile pages can send crafted postMessage events that mimic our schema.
-// RULE: ONLY accept messages with a known _sinBridgeType from our own origin.
-// Every handler for window.postMessage MUST call this validator first.
-
-const ALLOWED_MAIN_WORLD_MSG_TYPES = new Set([
-  'NETWORK_EVENT',      // fetch/XHR correlation from MAIN-world interceptor
-  'BEHAVIOR_EVENT',     // user interaction timeline event from MAIN-world capture
-  'SNAPSHOT_REQUEST',   // snapshot trigger from in-page script
-]);
-
-function validateMainWorldMessage(event) {
-  if (!event || typeof event !== 'object') return null;
-  const data = event.data;
-  if (!data || typeof data !== 'object') return null;
-  if (!ALLOWED_MAIN_WORLD_MSG_TYPES.has(data._sinBridgeType)) return null;
-  if (typeof data.payload !== 'object' || data.payload === null) return null;
-  return data;
-}
-
 
 function addLog(level, msg) {
   const entry = { level, msg, timestamp: new Date().toISOString() };
@@ -1199,9 +1161,35 @@ reg('storage_clear', async () => { await chrome.storage.local.clear(); return { 
 // WHAT: Registers the get_network_requests tool for the MCP Server.
 // WHY: Agents use this to control the browser.
 reg('get_network_requests', async (p) => ({ requests: requestLog.slice(-(p.count || 50)) }));
-// TOOL REGISTRATION: block_url
-// WHAT: Registers the block_url tool for the MCP Server.
-// WHY: Agents use this to control the browser.
+reg('get_network_correlation_events', async (p = {}) => {
+  const count = Number.isFinite(p.count) ? p.count : 50;
+  const scoped = typeof p.tabId === 'number'
+    ? mainWorldNetworkLog.filter((entry) => entry.tabId === p.tabId)
+    : mainWorldNetworkLog;
+  return {
+    events: scoped.slice(-count),
+    source: 'main-world',
+  };
+});
+reg('export_recorded_session', async (p = {}) => {
+  const networkCount = Number.isFinite(p.networkCount) ? p.networkCount : 250;
+  const webRequestCount = Number.isFinite(p.webRequestCount) ? p.webRequestCount : 250;
+  const scopedNetworkEvents = typeof p.tabId === 'number'
+    ? mainWorldNetworkLog.filter((entry) => entry.tabId === p.tabId)
+    : mainWorldNetworkLog;
+  const scopedWebRequestEvents = typeof p.tabId === 'number'
+    ? requestLog.filter((entry) => entry.tabId === p.tabId)
+    : requestLog;
+  const lastNetworkEvent = scopedNetworkEvents[scopedNetworkEvents.length - 1] || null;
+  return buildSessionExport({
+    sessionId: p.sessionId || null,
+    startedAt: p.startedAt || scopedNetworkEvents[0]?.timestamp || Date.now(),
+    tabId: typeof p.tabId === 'number' ? p.tabId : (lastNetworkEvent?.tabId ?? null),
+    frameUrl: p.frameUrl || lastNetworkEvent?.frameUrl || null,
+    networkEvents: scopedNetworkEvents.slice(-networkCount),
+    webRequestEvents: scopedWebRequestEvents.slice(-webRequestCount),
+  });
+});
 reg('block_url', async (p) => {
   if (!p.pattern || typeof p.pattern !== 'string' || p.pattern.trim() === '') return { error: 'pattern must be a non-empty string' };
   if (p.pattern.length > 2000) return { error: 'pattern exceeds maximum length of 2000 characters' };
@@ -3451,6 +3439,42 @@ const truncUrl = (u) => (u && u.length > MAX_URL_LEN ? u.slice(0, MAX_URL_LEN) +
 chrome.webRequest.onBeforeRequest.addListener((d) => { requestLog.push({ type: 'request', method: d.method, url: truncUrl(d.url), tabId: d.tabId, resType: d.type, time: d.timeStamp }); if (requestLog.length > MAX_LOG) requestLog.shift(); }, { urls: ['<all_urls>'] }, ['requestBody']);
 chrome.webRequest.onCompleted.addListener((d) => { requestLog.push({ type: 'completed', url: truncUrl(d.url), tabId: d.tabId, status: d.statusCode, time: d.timeStamp }); if (requestLog.length > MAX_LOG) requestLog.shift(); }, { urls: ['<all_urls>'] });
 chrome.webRequest.onErrorOccurred.addListener((d) => { requestLog.push({ type: 'error', url: truncUrl(d.url), tabId: d.tabId, error: d.error, time: d.timeStamp }); if (requestLog.length > MAX_LOG) requestLog.shift(); }, { urls: ['<all_urls>'] });
+
+// --- MAIN-world Messages ---
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const validMessage = validateMainWorldMessage(message);
+  if (!validMessage) return false;
+
+  if (validMessage._sinBridgeType === 'NETWORK_EVENT') {
+    const payload = {
+      ...validMessage.payload,
+      tabId: typeof validMessage.payload.tabId === 'number' ? validMessage.payload.tabId : (sender.tab ? sender.tab.id : null),
+      frameUrl: validMessage.payload.frameUrl || sender.url || null,
+      source: 'main-world',
+      observedAt: Date.now(),
+    };
+
+    pushBounded(mainWorldNetworkLog, payload, MAX_MAIN_WORLD_NETWORK_LOG);
+    pushBounded(requestLog, {
+      type: 'main-world',
+      phase: payload.phase || 'request',
+      api: payload.api || 'fetch',
+      method: payload.method || 'GET',
+      url: truncUrl(payload.url || ''),
+      requestId: payload.requestId || null,
+      tabId: payload.tabId,
+      status: payload.response && typeof payload.response.status === 'number' ? payload.response.status : null,
+      error: payload.error ? payload.error.message : null,
+      time: payload.timestamp || Date.now(),
+    }, MAX_LOG);
+
+    log('info', `Captured MAIN-world ${payload.api || 'fetch'} ${payload.phase || 'request'} for ${payload.method || 'GET'} ${payload.url || ''}`);
+    sendResponse({ accepted: true });
+    return false;
+  }
+
+  return false;
+});
 
 // --- External Messages ---
 const ALLOWED_EXTERNAL_ORIGINS = ['https://opensin.ai', 'http://localhost', 'http://127.0.0.1', 'https://127.0.0.1'];

@@ -146,23 +146,21 @@ bun run deploy:server
 bun run ext:package
 ```
 
-## Validation Contract
+## Network Correlation Export
 
-OpenSIN-Bridge now distinguishes between the fast default test loop, issue-scoped regression suites, and the pull-request verification contract.
+OpenSIN now captures `fetch` and `XMLHttpRequest` directly in the page's **MAIN world** at `document_start` so network payload previews can be correlated with browser-observed request metadata.
 
-- `npm test` / `npm run test:default` = fast local validation
-- `npm run test:issue -- --issue=<number>` = targeted regression coverage for one issue
-- `npm run test:all` = default suite plus every registered issue regression
-- `npm run verify:pr` = review-ready verification before opening or updating a PR
+- The injector performs passive MAIN-world capture in `extension/content/injector.js`.
+- The MV3 service worker preserves the existing `chrome.webRequest` log and now also stores validated MAIN-world `NETWORK_EVENT` messages.
+- `export_recorded_session` emits the stable OpenSIN session export schema documented in [`docs/SESSION_EXPORT_SCHEMA.md`](docs/SESSION_EXPORT_SCHEMA.md).
 
-The full policy and suite-registration rules live in [`docs/VALIDATION.md`](docs/VALIDATION.md).
+## Testing
 
-## Issue-Scoped Cloud Execution
+```bash
+npm test
+```
 
-Cloud executors must not work from a dirty default checkout. OpenSIN-Bridge now standardizes issue work in dedicated worktrees under `/Users/jeremy/dev/clean-worktrees/` with an explicit PR isolation gate.
-
-- Workflow: [`docs/ISSUE_SCOPED_EXECUTION.md`](docs/ISSUE_SCOPED_EXECUTION.md)
-- Review checklist: [`docs/PR_ISOLATION_CHECKLIST.md`](docs/PR_ISOLATION_CHECKLIST.md)
+This branch adds targeted tests for MAIN-world fetch/XHR capture plus the stable session export schema.
 
 ## License
 
