@@ -50,7 +50,7 @@ bash native-host/install_host.sh --target-dir /tmp/opensin-native-host-test
 This is only needed if you deliberately load a build that does **not** use the checked-in manifest key.
 
 ```bash
-bash native-host/install_host.sh --extension-id aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+bash native-host/install_host.sh --extension-id abcdefghijklmnopqrstuvwxyzabcdef
 ```
 
 ## Validation steps
@@ -65,10 +65,8 @@ python3 -m json.tool /tmp/opensin-native-host-test/ai.opensin.bridge.host.json >
 ### Validate host framing directly
 
 ```bash
-node --test test/native-host.test.js
+npm test -- --test-name-pattern="native host"
 ```
-
-Use the targeted command while iterating on the native host surface. Before review, finish with `bun test` (or the explicit alias `bun run test:all`) so the native-host checks run alongside the rest of the OpenSIN regression contract.
 
 The automated test suite spawns `opensin_host.py`, sends framed JSON messages, verifies `ping`, verifies authenticated fetch behavior, and verifies installer output.
 

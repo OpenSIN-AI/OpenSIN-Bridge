@@ -1,4 +1,4 @@
-const { afterEach, describe, it } = require('node:test');
+const { after, afterEach, describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -85,44 +85,28 @@ function createHostProcess() {
   };
 }
 
-function runProcess(command, args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString('utf8');
-    });
-
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString('utf8');
-    });
-
-    child.on('error', reject);
-    child.on('close', (status) => {
-      resolve({ status, stdout, stderr });
-    });
-  });
-}
-
 afterEach(() => {
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-describe('native host manifest helpers', () => {
-  it('derives a stable Chrome extension id from the manifest public key', async () => {
-    const manifestLib = await import(manifestLibPath);
+after(async () => {
+  // No global resources to close. This hook keeps node:test explicit.
+});
+
+describe('native host manifest helpers', async () => {
+  const manifestLib = await import(manifestLibPath);
+  const shared = await import(sharedModulePath);
+
+  it('derives a stable Chrome extension id from the manifest public key', () => {
     const extensionManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     const extensionId = manifestLib.computeChromeExtensionId(extensionManifest.key);
 
     assert.match(extensionId, /^[a-p]{32}$/);
   });
 
-  it('builds safe native request envelopes for the service worker', async () => {
-    const shared = await import(sharedModulePath);
+  it('builds safe native request envelopes for the service worker', () => {
     const envelope = shared.createNativeEnvelope({
       command: 'ping',
       requestId: 'req-1',
@@ -138,7 +122,6 @@ describe('native host manifest helpers', () => {
   });
 
   it('prints a deterministic install manifest', async () => {
-    const manifestLib = await import(manifestLibPath);
     const outputDir = createTempDir();
     const { stdout, stderr, status } = await runProcess('bash', [
       installScriptPath,
@@ -255,3 +238,24 @@ describe('native host runtime', () => {
     await once(host.child, 'exit');
   });
 });
+
+function runProcess(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+
+    child.on('error', reject);
+    child.on('close', (status) => {
+      resolve({ status, stdout, stderr });
+    });
+  });
+}

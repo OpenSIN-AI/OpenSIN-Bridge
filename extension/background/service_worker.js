@@ -1,7 +1,16 @@
 import { createBehaviorTimelineStore } from './behavior_timeline_store.mjs';
 
 let offscreenReady = false;
-const VERSION = chrome.runtime.getManifest().version;
+// Shared deterministic primitive helpers are loaded as a side-effect module so
+// the same evidence-based rule set can be reused by the background runtime,
+// browser-side scripts, and Node-based tests without introducing build tooling.
+import '../shared/deterministic-primitives.js';
+
+// The helper stays nullable on purpose. If loading ever fails, the runtime must
+// gracefully continue with the existing adaptive path instead of crashing.
+const deterministicPrimitives = globalThis.__OpenSINDeterministicPrimitives || null;
+
+const VERSION = '4.0.0';
 const HF_MCP_URL = 'wss://openjerro-opensin-bridge-mcp.hf.space';
 const TOOL_REGISTRY = {};
 let hfWs = null;
@@ -2739,8 +2748,9 @@ reg('snapshot', async (p) => {
   }
 });
 
-// Rebuild the current tab snapshot and translate the live ref map into the
-// compact structure expected by the deterministic primitive matcher.
+// This helper rebuilds the accessibility snapshot on demand and immediately
+// translates the current tab's ref map into the compact structure expected by
+// the deterministic primitive matcher.
 async function buildDeterministicRefsForTab(tabId) {
   const snapshotResult = await execTool('snapshot', { tabId });
   if (!snapshotResult || snapshotResult.error) {
@@ -2763,9 +2773,6 @@ async function buildDeterministicRefsForTab(tabId) {
   return { refs, snapshotError: null };
 }
 
-// TOOL REGISTRATION: click_ref
-// WHAT: Registers the click_ref tool for the MCP Server.
-// WHY: Agents use this to control the browser.
 reg('click_ref', async (p) => {
   if (!p?.ref || typeof p.ref !== 'string') return { error: 'ref is required (e.g. "@e3")' };
   const ref = _refMap.get(p.ref);
@@ -3213,9 +3220,9 @@ reg('vision_click', async (p) => {
     const tabId = p?.tabId || await activeTabId();
 
     // Deterministic fast-path:
-    // Known button families such as Save / Continue / Submit should bypass the
-    // vision stack entirely when the live accessibility tree already exposes a
-    // single matching interactive ref.
+    // If the caller asked for an obvious known button such as Save / Continue /
+    // Submit, we rebuild the current AX snapshot and try a ref-based click first.
+    // This avoids unnecessary vision calls for UI that is already fully known.
     if (deterministicPrimitives?.resolveDeterministicRefByDescription) {
       const { refs, snapshotError } = await buildDeterministicRefsForTab(tabId);
       const deterministicMatch = deterministicPrimitives.resolveDeterministicRefByDescription(

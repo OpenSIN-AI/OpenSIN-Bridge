@@ -1,1 +1,1 @@
-Common commands for OpenSIN-Bridge:\n- bun install\n- bun run ext:dev  # load extension/ manually in chrome://extensions\n- bun run ext:package  # create dist/opensin-bridge-extension.zip\n- bun run server:dev  # run Cloudflare worker locally\n- bun run deploy:server  # deploy worker\n- bun run build\nUseful macOS shell commands: ls, pwd, git status, npm, node.
+Core commands: npm install, npm run ext:dev, npm run ext:package, npm run server:dev, npm run deploy:server, npm run build. Standard macOS utilities available: git, ls, pwd, grep, bash/zsh, node, npm.

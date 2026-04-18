@@ -144,34 +144,7 @@ The content/injection layer now performs recursive discovery across the reachabl
 
 ### Verification
 
-Run `bun test` to execute the default OpenSIN regression contract. That command now runs every `test/*.test.js` file so newly added issue-scoped regressions are not silently skipped.
-
-## Validation Contract
-
-- `bun test`: default local and PR validation command. Use this before review because it exercises the full checked-in Node test suite.
-- `bun run test:all`: explicit alias for the same full-suite contract. Use this in docs, CI notes, or PR checklists when you want to signal "run everything" without ambiguity.
-- `node --test test/<surface>.test.js`: focused verification for the surface you are actively changing. Use this while iterating on a specific issue, then finish with `npm test` before claiming the branch is ready.
-
-Examples:
-
-```bash
-bun test
-bun run test:all
-node --test test/native-host.test.js
-node --test test/bridge.test.js
-```
-
-## Native Messaging Host
-
-The authenticated-session / CSP-restricted fallback is documented in [`docs/NATIVE_MESSAGING_HOST.md`](docs/NATIVE_MESSAGING_HOST.md).
-
-Key surfaces:
-
-- `native_host_status`
-- `native_host_ping`
-- `native_host_start_workflow`
-- `native_host_authenticated_fetch`
-- `native_host_end_workflow`
+Run `npm test` to execute the injector traversal coverage.
 
 ## License
 

@@ -151,34 +151,38 @@ Chrome Web Store
 
 ## 7. Runtime Self-Healing Observation Loop
 
-The bridge runtime now verifies `click_ref` interactions inside the extension instead of treating a successful event dispatch as proof that the page changed.
+The extension runtime now verifies interactive actions directly inside the bridge architecture instead of relying on external experiment scripts.
 
-### Verification flow
+### Interaction flow
 
-1. Capture a **before** observation snapshot with accessibility-tree state plus a CDP screenshot.
-2. Execute the primary interaction strategy (`cdp_mouse`).
-3. Capture an **after** observation snapshot.
-4. Score the result with deterministic signals:
+1. `click_ref` captures a **before** observation snapshot from the active tab context.
+2. The runtime executes the primary strategy (`cdp_mouse`).
+3. The runtime captures an **after** observation snapshot and evaluates four signals:
    - DOM diff from the accessibility tree
-   - visual diff from screenshot length + checksum heuristics
+   - visual diff from a CDP screenshot heuristic
    - URL change
    - title change
-5. If all signals remain unchanged, classify the attempt as a **no-op** and automatically retry with fallback strategies (`dom_click`, then `dom_dispatch`).
-6. Persist the attempt evidence and expose it through `get_interaction_proof`.
+4. If all signals stay unchanged, the action is classified as a **no-op**.
+5. The runtime automatically retries with fallback strategies (`dom_click`, then `dom_dispatch`).
+6. Every attempt stores proof artifacts in memory and exposes them through `get_interaction_proof`.
 
-### Boundary split
+### Why this boundary matters
 
-- **`service_worker.js`** collects snapshots, executes strategies, and stores proof bundles.
-- **`observation-runtime.mjs`** stays pure and testable; it only compares evidence and classifies outcomes.
-- **`server.js`** advertises the new runtime surfaces so MCP clients can call them directly.
+- **Service worker responsibility:** collect browser evidence, execute strategies, persist proof bundles.
+- **Observation runtime responsibility:** deterministically score DOM and visual evidence with pure helpers that are testable in Node.
+- **Server responsibility:** advertise the new runtime tools to MCP clients so the evidence path is discoverable.
 
-## 8. Human-Entropy Interaction Hardening
+### Proof model
 
-- All service-worker click, hover, iframe, CAPTCHA, and vision interaction paths must route through shared human-entropy helpers.
-- The shared helpers must emit movement, coordinate jitter, non-zero dwell, and non-deterministic timing instead of instant center clicks.
-- Raw `mousePressed` / `mouseReleased` CDP sequences are allowed only inside the shared helper so tests can detect handler-level regressions immediately.
+Each observed interaction now stores:
 
-## 9. Security Checklist
+- strategy order and fallback status
+- DOM diff summary (`addedCount`, `removedCount`, previews)
+- visual diff summary (length delta, checksum drift, threshold)
+- full before/after screenshots for every attempt
+- final proof identifier retrievable through `get_interaction_proof`
+
+## 8. Security Checklist
 
 - [ ] Extension contains ZERO API keys
 - [ ] Extension contains ZERO LLM prompts
