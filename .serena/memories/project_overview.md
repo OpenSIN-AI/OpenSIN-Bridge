@@ -1,0 +1,1 @@
+OpenSIN-Bridge is a proprietary thin-client Chrome MV3 extension plus Cloudflare Worker backend. The extension handles browser-side DOM extraction and action execution; the backend holds protected business logic, auth, billing, and automation intelligence. Main top-level areas are extension/, server/, docs/, scripts/, and ops/.

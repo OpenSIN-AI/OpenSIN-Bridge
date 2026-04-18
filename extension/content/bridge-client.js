@@ -17,18 +17,33 @@
   const JITTER_MIN = 2000; // ms
   const JITTER_MAX = 5500; // ms
 
+  // The shared helper may or may not be present depending on how this file is
+  // injected during local experiments, so we treat it as optional and never let
+  // its absence break the legacy extraction path.
+  const deterministicPrimitives = globalThis.__OpenSINDeterministicPrimitives || null;
+
   // --- DOM Extraction (no business logic — just data) ---
 
   function extractPageData() {
-    return {
+    const buttons = extractButtons();
+    const payload = {
       url: window.location.href,
       title: document.title,
       timestamp: Date.now(),
       forms: extractForms(),
-      buttons: extractButtons(),
+      buttons,
       links: extractLinks(),
       text_content: document.body?.innerText?.substring(0, 5000) || '',
     };
+
+    // Deterministic metadata is additive: it enriches the snapshot for the
+    // runtime without changing the legacy shape that existing callers already
+    // expect. Unknown pages therefore continue to work exactly as before.
+    if (deterministicPrimitives?.buildDeterministicPrimitivePayload) {
+      payload.deterministic_primitives = deterministicPrimitives.buildDeterministicPrimitivePayload(payload, window.location.href);
+    }
+
+    return payload;
   }
 
   function extractForms() {
@@ -52,8 +67,12 @@
   function extractButtons() {
     const buttons = [];
     document.querySelectorAll('button, [role="button"], input[type="submit"]').forEach(el => {
+      // Input-based submit controls often store their visible label in .value
+      // rather than textContent, so we capture both to make deterministic button
+      // matching reliable across native and custom form controls.
       buttons.push({
-        text: el.textContent?.trim()?.substring(0, 100) || '',
+        text: (el.textContent || el.value || '').trim().substring(0, 100),
+        value: typeof el.value === 'string' ? el.value.substring(0, 100) : '',
         id: el.id || '',
         selector: generateSelector(el),
         visible: el.offsetParent !== null,

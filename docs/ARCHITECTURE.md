@@ -139,7 +139,40 @@ Chrome Web Store
 | **Total per user** | **~0.65 EUR** |
 | **Margin per user** | **~4.35 EUR (87%)** |
 
-## 7. Security Checklist
+## 7. Runtime Self-Healing Observation Loop
+
+The extension runtime now verifies interactive actions directly inside the bridge architecture instead of relying on external experiment scripts.
+
+### Interaction flow
+
+1. `click_ref` captures a **before** observation snapshot from the active tab context.
+2. The runtime executes the primary strategy (`cdp_mouse`).
+3. The runtime captures an **after** observation snapshot and evaluates four signals:
+   - DOM diff from the accessibility tree
+   - visual diff from a CDP screenshot heuristic
+   - URL change
+   - title change
+4. If all signals stay unchanged, the action is classified as a **no-op**.
+5. The runtime automatically retries with fallback strategies (`dom_click`, then `dom_dispatch`).
+6. Every attempt stores proof artifacts in memory and exposes them through `get_interaction_proof`.
+
+### Why this boundary matters
+
+- **Service worker responsibility:** collect browser evidence, execute strategies, persist proof bundles.
+- **Observation runtime responsibility:** deterministically score DOM and visual evidence with pure helpers that are testable in Node.
+- **Server responsibility:** advertise the new runtime tools to MCP clients so the evidence path is discoverable.
+
+### Proof model
+
+Each observed interaction now stores:
+
+- strategy order and fallback status
+- DOM diff summary (`addedCount`, `removedCount`, previews)
+- visual diff summary (length delta, checksum drift, threshold)
+- full before/after screenshots for every attempt
+- final proof identifier retrievable through `get_interaction_proof`
+
+## 8. Security Checklist
 
 - [ ] Extension contains ZERO API keys
 - [ ] Extension contains ZERO LLM prompts

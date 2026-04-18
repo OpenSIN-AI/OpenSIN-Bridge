@@ -1,4 +1,13 @@
 let offscreenReady = false;
+// Shared deterministic primitive helpers are loaded as a side-effect module so
+// the same evidence-based rule set can be reused by the background runtime,
+// browser-side scripts, and Node-based tests without introducing build tooling.
+import '../shared/deterministic-primitives.js';
+
+// The helper stays nullable on purpose. If loading ever fails, the runtime must
+// gracefully continue with the existing adaptive path instead of crashing.
+const deterministicPrimitives = globalThis.__OpenSINDeterministicPrimitives || null;
+
 const VERSION = '4.0.0';
 const HF_MCP_URL = 'wss://openjerro-opensin-bridge-mcp.hf.space';
 const TOOL_REGISTRY = {};
@@ -1119,30 +1128,7 @@ reg('query_shadow_dom', async (p) => {
 
 reg('click_shadow_element', async (p) => {
   const tabId = p.tabId || await activeTabId();
-  return safeExecute(tabId, (selector) => {
-    const findInShadow = (root) => {
-      const el = root.querySelector(selector);
-      if (el) return el;
-      for (const child of root.children || []) {
-        if (child.shadowRoot) {
-          const found = findInShadow(child.shadowRoot);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-    
-    const el = findInShadow(document) || document.querySelector(selector);
-    if (!el) return { clicked: false, reason: 'Element not found' };
-    
-    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    setTimeout(() => {
-      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-      el.click();
-    }, 50);
-    
-    return { clicked: true, tag: el.tagName, inShadowRoot: !!el.getRootNode?.()?.host };
-  }, [p.selector]);
+  return safeExecute(tabId, runHumanEntropyDomInteraction, [{ kind: 'shadow-click', selector: p.selector }]);
 });
 
 // --- IFRAME INTERACTION (v2.9.0) ---
@@ -1171,7 +1157,16 @@ reg('interact_iframe', async (p) => {
   const ALLOWED_ACTIONS = ['click', 'type', 'get_text', 'get_html'];
   if (!p.action || !ALLOWED_ACTIONS.includes(p.action)) return { error: `action must be one of: ${ALLOWED_ACTIONS.join(', ')}` };
   const tabId = p.tabId || await activeTabId();
-  return safeExecute(tabId, ({ selector: iframeSelector, action, innerSelector }) => {
+
+  if (p.action === 'click') {
+    return safeExecute(tabId, runHumanEntropyDomInteraction, [{
+      kind: 'iframe-click',
+      iframeSelector: p.selector,
+      innerSelector: p.innerSelector,
+    }]);
+  }
+
+  return safeExecute(tabId, ({ selector: iframeSelector, action, innerSelector, text }) => {
     const iframe = document.querySelector(iframeSelector);
     if (!iframe) return { error: 'Iframe not found' };
     
@@ -1182,12 +1177,8 @@ reg('interact_iframe', async (p) => {
       const target = doc.querySelector(innerSelector);
       if (!target) return { error: `Element "${innerSelector}" not found in iframe` };
       
-      if (action === 'click') {
-        target.click();
-        return { success: true, action: 'click', tag: target.tagName };
-      }
-      if (action === 'type' && p.text) {
-        target.value = p.text;
+      if (action === 'type' && text) {
+        target.value = text;
         target.dispatchEvent(new Event('input', { bubbles: true }));
         return { success: true, action: 'type', tag: target.tagName };
       }
@@ -1202,7 +1193,7 @@ reg('interact_iframe', async (p) => {
     } catch(e) {
       return { error: `Access denied: ${e.message}` };
     }
-  }, [p]);
+  }, [{ selector: p.selector, action: p.action, innerSelector: p.innerSelector, text: p.text }]);
 });
 
 // --- COOKIE PERSISTENCE & ROTATION (v2.9.0) ---
@@ -1417,6 +1408,31 @@ reg('snapshot', async (p) => {
     return { error: e.message };
   }
 });
+
+// This helper rebuilds the accessibility snapshot on demand and immediately
+// translates the current tab's ref map into the compact structure expected by
+// the deterministic primitive matcher.
+async function buildDeterministicRefsForTab(tabId) {
+  const snapshotResult = await execTool('snapshot', { tabId });
+  if (!snapshotResult || snapshotResult.error) {
+    return { refs: [], snapshotError: snapshotResult?.error || 'snapshot unavailable' };
+  }
+
+  const refs = [];
+  for (const [refId, ref] of _refMap.entries()) {
+    if (ref.tabId !== tabId) {
+      continue;
+    }
+
+    refs.push({
+      ref: refId,
+      role: ref.role,
+      name: ref.name,
+    });
+  }
+
+  return { refs, snapshotError: null };
+}
 
 reg('click_ref', async (p) => {
   if (!p?.ref || typeof p.ref !== 'string') return { error: 'ref is required (e.g. "@e3")' };
@@ -1829,6 +1845,36 @@ reg('vision_click', async (p) => {
   if (!p?.description) return { error: 'description is required (natural language)' };
   try {
     const tabId = p?.tabId || await activeTabId();
+
+    // Deterministic fast-path:
+    // If the caller asked for an obvious known button such as Save / Continue /
+    // Submit, we rebuild the current AX snapshot and try a ref-based click first.
+    // This avoids unnecessary vision calls for UI that is already fully known.
+    if (deterministicPrimitives?.resolveDeterministicRefByDescription) {
+      const { refs, snapshotError } = await buildDeterministicRefsForTab(tabId);
+      const deterministicMatch = deterministicPrimitives.resolveDeterministicRefByDescription(
+        p.description,
+        refs,
+        p.currentUrl || ''
+      );
+
+      if (deterministicMatch?.ref) {
+        const clickResult = await execTool('click_ref', { ref: deterministicMatch.ref });
+        if (!clickResult?.error) {
+          return {
+            ...clickResult,
+            deterministic: true,
+            primitive: deterministicMatch.primitive,
+            resolution: 'ref-fast-path',
+          };
+        }
+
+        log('warn', `vision_click deterministic fast-path failed, falling back to vision: ${clickResult.error}`);
+      } else if (snapshotError) {
+        log('warn', `vision_click could not build deterministic refs: ${snapshotError}`);
+      }
+    }
+
     const vp = await visionViewport(tabId);
     const imgW = Math.round(vp.w * vp.dpr);
     const imgH = Math.round(vp.h * vp.dpr);

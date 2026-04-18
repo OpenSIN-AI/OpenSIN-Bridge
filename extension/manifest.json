@@ -22,6 +22,7 @@
         {
             "all_frames": true,
             "js": [
+                "shared/deterministic-primitives.js",
                 "content/injector.js"
             ],
             "matches": [

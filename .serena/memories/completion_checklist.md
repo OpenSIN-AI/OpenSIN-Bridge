@@ -1,0 +1,1 @@
+After changes, run the relevant verification command for the touched surface. For extension/content work, ensure the content-script behavior still loads and update docs/tests when behavior changes. If dependencies are missing, run npm install before testing.

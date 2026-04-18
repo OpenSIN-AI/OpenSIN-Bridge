@@ -125,6 +125,24 @@ npm run deploy:server
 npm run ext:package
 ```
 
+## DOM Discovery Coverage
+
+The content/injection layer now performs recursive discovery across the reachable DOM surface instead of only scanning the light DOM.
+
+- `__SIN_BRIDGE__.$()` / `$$()` and the compatibility helpers `_sinDeepQuery()` / `_sinDeepQueryAll()` traverse nested **open shadow roots** recursively.
+- `snapshot()` includes links, inputs, and buttons found inside nested open shadow roots and inside **same-origin** `iframe` / `frame` documents.
+- Snapshot payloads include `location` metadata plus `limitations` entries for skipped cross-origin frames so operators can see when discovery was intentionally incomplete.
+
+### Explicit limitations
+
+- **Closed shadow roots** are excluded by design because page JavaScript cannot introspect them. OpenSIN documents that limitation instead of pretending those elements are visible.
+- **Cross-origin iframes** cannot be traversed from the top-page content script because the browser blocks access to their `contentDocument`. Those frames are reported in snapshot limitations and require a separate injection context if support is needed later.
+- The current traversal logic is read/query focused. It preserves the existing content-script contract while extending selector-based read/mutate helpers to the same reachable DOM surface.
+
+### Verification
+
+Run `npm test` to execute the injector traversal coverage.
+
 ## License
 
 **PROPRIETARY** - All rights reserved. This software is NOT open source.
