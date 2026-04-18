@@ -115,6 +115,24 @@ bun run ext:dev
 # Run server locally
 bun run server:dev
 
+# Run the fast default validation contract
+npm test
+
+# Run the full validation surface
+npm run test:all
+
+# Run a single issue regression suite
+npm run test:issue -- --issue=27
+
+# Run the pull-request verification contract
+npm run verify:pr
+
+# Create an isolated issue worktree
+npm run issue:worktree -- --issue 26 --branch feat/worktree-pr-isolation-ops
+
+# Verify that a PR only contains issue-scoped files
+npm run verify:issue-scope -- --issue 26 --branch feat/worktree-pr-isolation-ops --base origin/main --allow README.md --allow docs/ --allow scripts/ --allow package.json
+
 # Build for production
 bun run build
 
@@ -128,23 +146,23 @@ bun run deploy:server
 bun run ext:package
 ```
 
-## DOM Discovery Coverage
+## Validation Contract
 
-The content/injection layer now performs recursive discovery across the reachable DOM surface instead of only scanning the light DOM.
+OpenSIN-Bridge now distinguishes between the fast default test loop, issue-scoped regression suites, and the pull-request verification contract.
 
-- `__SIN_BRIDGE__.$()` / `$$()` and the compatibility helpers `_sinDeepQuery()` / `_sinDeepQueryAll()` traverse nested **open shadow roots** recursively.
-- `snapshot()` includes links, inputs, and buttons found inside nested open shadow roots and inside **same-origin** `iframe` / `frame` documents.
-- Snapshot payloads include `location` metadata plus `limitations` entries for skipped cross-origin frames so operators can see when discovery was intentionally incomplete.
+- `npm test` / `npm run test:default` = fast local validation
+- `npm run test:issue -- --issue=<number>` = targeted regression coverage for one issue
+- `npm run test:all` = default suite plus every registered issue regression
+- `npm run verify:pr` = review-ready verification before opening or updating a PR
 
-### Explicit limitations
+The full policy and suite-registration rules live in [`docs/VALIDATION.md`](docs/VALIDATION.md).
 
-- **Closed shadow roots** are excluded by design because page JavaScript cannot introspect them. OpenSIN documents that limitation instead of pretending those elements are visible.
-- **Cross-origin iframes** cannot be traversed from the top-page content script because the browser blocks access to their `contentDocument`. Those frames are reported in snapshot limitations and require a separate injection context if support is needed later.
-- The current traversal logic is read/query focused. It preserves the existing content-script contract while extending selector-based read/mutate helpers to the same reachable DOM surface.
+## Issue-Scoped Cloud Execution
 
-### Verification
+Cloud executors must not work from a dirty default checkout. OpenSIN-Bridge now standardizes issue work in dedicated worktrees under `/Users/jeremy/dev/clean-worktrees/` with an explicit PR isolation gate.
 
-Run `npm test` to execute the injector traversal coverage.
+- Workflow: [`docs/ISSUE_SCOPED_EXECUTION.md`](docs/ISSUE_SCOPED_EXECUTION.md)
+- Review checklist: [`docs/PR_ISOLATION_CHECKLIST.md`](docs/PR_ISOLATION_CHECKLIST.md)
 
 ## License
 
