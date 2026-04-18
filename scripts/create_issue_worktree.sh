@@ -94,8 +94,14 @@ git fetch origin main >/dev/null
 # Reuse the existing worktree path when it already exists instead of silently creating
 # multiple directories for the same issue. This makes cloud handoff deterministic.
 if [[ -d "$TARGET_PATH/.git" || -f "$TARGET_PATH/.git" ]]; then
+  EXISTING_BRANCH="$(git -C "$TARGET_PATH" branch --show-current)"
+  if [[ "$EXISTING_BRANCH" != "$BRANCH_NAME" ]]; then
+    echo "[issue-worktree] Existing worktree branch mismatch at $TARGET_PATH" >&2
+    echo "[issue-worktree] Expected '$BRANCH_NAME' but found '$EXISTING_BRANCH'" >&2
+    exit 1
+  fi
   echo "[issue-worktree] Reusing existing worktree at $TARGET_PATH"
-  echo "[issue-worktree] Open it with: cd "$TARGET_PATH""
+  echo "[issue-worktree] Open it with: cd $TARGET_PATH"
   exit 0
 fi
 
@@ -109,11 +115,11 @@ fi
 
 # The new worktree is created from an explicit base ref so operators can reason about
 # the exact diff range that will later appear in the PR.
-git worktree add -b "$BRANCH_NAME" "$TARGET_PATH" "$BASE_REF"
+git worktree add -b "$BRANCH_NAME" "$TARGET_PATH" "$BASE_REF" >/dev/null
 
 echo "[issue-worktree] Created isolated worktree"
 echo "  issue:   #$ISSUE_NUMBER"
 echo "  branch:  $BRANCH_NAME"
 echo "  base:    $BASE_REF"
 echo "  path:    $TARGET_PATH"
-echo "[issue-worktree] Next step: cd "$TARGET_PATH" && git status --short --branch"
+echo "[issue-worktree] Next step: cd $TARGET_PATH && git status --short --branch"

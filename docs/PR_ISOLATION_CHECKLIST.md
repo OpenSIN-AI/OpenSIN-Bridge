@@ -6,10 +6,9 @@ Use this checklist right before review, push, or PR creation.
 - [ ] The branch name matches the issue branch requested by the task
 - [ ] `git status --short` is empty
 - [ ] `git diff --name-only origin/main...HEAD` only contains issue-owned files
-- [ ] I ran `npm run verify:pr`
-- [ ] I ran the issue-scoped regression command when the issue defines one
+- [ ] I ran the targeted verification command for the issue lane
 - [ ] I ran `npm run verify:issue-scope -- ...` with the correct allowlist
-- [ ] The PR description states the exact verification commands and results
+- [ ] The PR description states the exact verification command and result
 - [ ] No unrelated generated files, local experiments, or rescue edits were left in the branch
 
 Recommended verification command template:

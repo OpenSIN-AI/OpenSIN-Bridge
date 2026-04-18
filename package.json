@@ -9,7 +9,10 @@
     "server:dev": "wrangler dev server/src/index.ts",
     "deploy:server": "wrangler deploy server/src/index.ts",
     "build": "npm run ext:package && echo 'Server deploys via wrangler'",
-    "test": "node --test test/*.test.mjs"
+    "test": "echo 'TODO: Add tests'",
+    "issue:worktree": "bash scripts/create_issue_worktree.sh",
+    "verify:issue-scope": "bash scripts/verify_issue_scope.sh",
+    "test:issue-worktree": "node --test test/issue-worktree.test.js"
   },
   "keywords": [
     "chrome-extension",

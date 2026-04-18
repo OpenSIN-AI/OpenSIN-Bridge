@@ -1,4 +1,7 @@
-# OpenSIN-Bridge\n\n> **OpenSIN ist keine Software. Es ist eine digitale Belegschaft.**\n> Die Bridge ist die sichere Tuer, durch die Nutzer auf die Intelligenz unserer Agenten zugreifen. Der Agent arbeitet (z.B. auf Prolific), die Intelligenz bleibt im Server.\n
+# OpenSIN-Bridge
+
+> **OpenSIN ist keine Software. Es ist eine digitale Belegschaft.**
+> Die Bridge ist die sichere Tuer, durch die Nutzer auf die Intelligenz unserer Agenten zugreifen. Der Agent arbeitet (z.B. auf Prolific), die Intelligenz bleibt im Server.
 
 > **Paid SaaS Chrome Extension (5 EUR/month) — Thin-Client Architecture**
 >
@@ -143,24 +146,27 @@ bun run test:deterministic
 bun run deploy:server
 
 # Package extension for Chrome Web Store
-bun run ext:package
+npm run ext:package
+
+# Create an isolated issue worktree
+npm run issue:worktree -- --issue 26 --branch feat/worktree-pr-isolation-ops
+
+# Verify that a PR only contains issue-scoped files
+npm run verify:issue-scope -- --issue 26 --branch feat/worktree-pr-isolation-ops --base origin/main --allow README.md --allow docs/ --allow scripts/ --allow package.json
+
+# Run the workflow regression tests for worktree and PR isolation
+npm run test:issue-worktree
 ```
 
-## Network Correlation Export
+## Issue-Scoped Cloud Execution
 
-OpenSIN now captures `fetch` and `XMLHttpRequest` directly in the page's **MAIN world** at `document_start` so network payload previews can be correlated with browser-observed request metadata.
+Cloud executors must not implement features from a dirty default checkout. OpenSIN-Bridge now standardizes issue work in dedicated worktrees under `/Users/jeremy/dev/clean-worktrees/` with an explicit PR isolation gate.
 
-- The injector performs passive MAIN-world capture in `extension/content/injector.js`.
-- The MV3 service worker preserves the existing `chrome.webRequest` log and now also stores validated MAIN-world `NETWORK_EVENT` messages.
-- `export_recorded_session` emits the stable OpenSIN session export schema documented in [`docs/SESSION_EXPORT_SCHEMA.md`](docs/SESSION_EXPORT_SCHEMA.md).
-
-## Testing
-
-```bash
-npm test
-```
-
-This branch adds targeted tests for MAIN-world fetch/XHR capture plus the stable session export schema.
+- Workflow: [`docs/ISSUE_SCOPED_EXECUTION.md`](docs/ISSUE_SCOPED_EXECUTION.md)
+- Review checklist: [`docs/PR_ISOLATION_CHECKLIST.md`](docs/PR_ISOLATION_CHECKLIST.md)
+- Worktree helper: `npm run issue:worktree -- --issue <n> --branch <branch>`
+- Scope gate: `npm run verify:issue-scope -- ...`
+- Regression tests: `npm run test:issue-worktree`
 
 ## License
 
