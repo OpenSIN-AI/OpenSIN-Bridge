@@ -150,7 +150,7 @@ Run `bun test` to execute the default OpenSIN regression contract. That command 
 
 - `bun test`: default local and PR validation command. Use this before review because it exercises the full checked-in Node test suite.
 - `bun run test:all`: explicit alias for the same full-suite contract. Use this in docs, CI notes, or PR checklists when you want to signal "run everything" without ambiguity.
-- `node --test test/<surface>.test.js`: focused verification for the surface you are actively changing. Use this while iterating on a specific issue, then finish with `bun test` before claiming the branch is ready.
+- `node --test test/<surface>.test.js`: focused verification for the surface you are actively changing. Use this while iterating on a specific issue, then finish with `npm test` before claiming the branch is ready.
 
 Examples:
 
