@@ -5,7 +5,7 @@
   "description": "OpenSIN Bridge \u2014 Thin-Client Chrome Extension + Server-Side SaaS Brain",
   "scripts": {
     "ext:dev": "echo 'Load extension/ folder in chrome://extensions (Developer Mode)'",
-    "ext:package": "cd extension && zip -r ../dist/opensin-bridge-extension.zip . -x '*.DS_Store'",
+    "ext:package": "mkdir -p dist && cd extension && zip -r ../dist/opensin-bridge-extension.zip . -x '*.DS_Store'",
     "server:dev": "wrangler dev server/src/index.ts",
     "deploy:server": "wrangler deploy server/src/index.ts",
     "build": "npm run ext:package && echo 'Server deploys via wrangler'",

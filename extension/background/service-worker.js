@@ -1,4 +1,28 @@
 /**
+ * ==============================================================================
+ * OpenSIN Component: service-worker.js
+ * ==============================================================================
+ * 
+ * DESCRIPTION / BESCHREIBUNG:
+ * Secondary service worker for the OpenSIN Bridge extension.
+ * 
+ * WHY IT EXISTS / WARUM ES EXISTIERT:
+ * Handles legacy API communication and badge status management.
+ * 
+ * RULES / REGELN:
+ * 1. EXTENSIVE LOGGING: Every function call must be traceable.
+ * 2. NO ASSUMPTIONS: Validate all inputs and external states.
+ * 3. SECURITY FIRST: Never leak credentials or session data.
+ * 
+ * CONSEQUENCES / KONSEQUENZEN:
+ * If this script fails, the extension icon won't update correctly.
+ * 
+ * AUTHOR: SIN-Zeus / A2A Fleet
+ * ==============================================================================
+ */
+
+
+/**
  * OpenSIN Bridge — Service Worker (Background Script)
  * 
  * This is a THIN CLIENT. It contains ZERO business logic.

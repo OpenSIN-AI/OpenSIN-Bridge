@@ -1,4 +1,56 @@
 /**
+ * ==============================================================================
+ * OpenSIN Component: injector.js
+ * ==============================================================================
+ *
+ * DESCRIPTION / BESCHREIBUNG:
+ * Content script injector for OpenSIN Bridge.
+ *
+ * WHY IT EXISTS / WARUM ES EXISTIERT:
+ * Facilitates DOM interaction and data extraction.
+ *
+ * RULES / REGELN:
+ * 1. EXTENSIVE LOGGING: Every function call must be traceable.
+ * 2. NO ASSUMPTIONS: Validate all inputs and external states.
+ * 3. SECURITY FIRST: Never leak credentials or session data.
+ *
+ * CONSEQUENCES / KONSEQUENZEN:
+ * If broken, agents lose the ability to 'see' or interact with web pages.
+ *
+ * AUTHOR: SIN-Zeus / A2A Fleet
+ * ==============================================================================
+ */
+
+/**
+ * ==============================================================================
+ * OpenSIN Bridge - Core Component (V4.0.0+)
+ * ==============================================================================
+ *
+ * DESCRIPTION / BESCHREIBUNG:
+ * This file is a critical component of the OpenSIN Bridge ecosystem.
+ * It enables direct, secure, and reliable communication between the Hugging Face
+ * MCP Server and the user's local Chrome browser.
+ *
+ * ARCHITECTURE / WARUM SO GEBAUT:
+ * - We DO NOT use Selenium, Puppeteer, or nodriver here.
+ * - We DO NOT launch new Chrome instances with --no-sandbox.
+ * - Instead, we use the Native Chrome Extension API (MV3) inside the user's
+ *   DEFAULT profile to ensure all cookies, sessions, and extensions remain intact.
+ *
+ * RULES / REGELN FÜR DIESEN CODE:
+ * 1. NO ASSUMPTIONS: Do not assume a tab or window exists. Always verify and handle missing states.
+ * 2. EXTENSIVE LOGGING: Every action must be logged. Silent failures are prohibited.
+ * 3. FALLBACKS: If an API fails (e.g. tabs.create without a window), fallback gracefully (e.g. create a window).
+ *
+ * CONSEQUENCES / KONSEQUENZEN WENN GEÄNDERT:
+ * - If you break the WebSocket connection here, the entire autonomous agent fleet goes blind.
+ * - If you change security policies (CSP), the extension might get banned by Chrome.
+ *
+ * AUTHOR: SIN-Zeus / A2A Team
+ * ==============================================================================
+ */
+
+/**
  * OpenSIN Bridge v4.0.0 — Content Script Injector
  * Runs on <all_urls> at document_start in MAIN world.
  *
@@ -443,6 +495,10 @@
   // ============================================================
   // SIN API — Injected into page context (MAIN world)
   // ============================================================
+  const BRIDGE_VERSION = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getManifest
+    ? chrome.runtime.getManifest().version
+    : '4.0.0';
+
   window.__SIN_BRIDGE__ = {
     version: '4.0.0',
     injected: true,
@@ -454,10 +510,10 @@
     // DOM Query helpers intentionally remain simple here. The feature task in
     // this branch is about network correlation rather than discovery semantics.
     $(selector, context) {
-      return (context || document).querySelector(selector);
+      return deepQuery(selector, context);
     },
     $$(selector, context) {
-      return Array.from((context || document).querySelectorAll(selector));
+      return deepQueryAll(selector, context);
     },
 
     // Get page snapshot for lightweight correlation with network activity.
@@ -487,7 +543,7 @@
 
     // Get computed styles for verification-oriented tooling.
     getStyles(selector) {
-      const el = document.querySelector(selector);
+      const el = deepQuery(selector);
       if (!el) return { found: false };
       const style = window.getComputedStyle(el);
       return {
@@ -506,12 +562,12 @@
     // a real user interaction.
     click(nonce, selector) {
       requireNonce(nonce);
-      const el = document.querySelector(selector);
+      const el = deepQuery(selector);
       if (!el) return { found: false };
       el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
       el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
       el.click();
-      return { found: true, tag: el.tagName, text: (el.textContent || '').slice(0, 100) };
+      return { found: true, tag: el.tagName, text: truncateText(el.textContent, 100) };
     },
 
     // Type text with proper events so framework-controlled inputs stay in sync.
@@ -520,7 +576,7 @@
       if (!selector || typeof selector !== 'string') return { error: 'selector required' };
       if (typeof text !== 'string') return { error: 'text must be a string' };
       if (text.length > 10000) return { error: 'text exceeds 10000 character limit' };
-      const el = document.querySelector(selector);
+      const el = deepQuery(selector);
       if (!el) return { found: false };
       el.focus();
       if (clear) {
@@ -614,7 +670,7 @@
           continue;
         }
         const safeKey = key.replace(/["\\]/g, '\\$&');
-        const el = document.querySelector(`[name="${safeKey}"], [id="${safeKey}"], [data-field="${safeKey}"]`);
+        const el = deepQuery(`[name="${safeKey}"], [id="${safeKey}"], [data-field="${safeKey}"]`);
         if (el) {
           el.focus();
           el.value = value;
@@ -632,7 +688,7 @@
     // the feature under change in this branch.
     scrollTo(nonce, selector) {
       requireNonce(nonce);
-      const el = document.querySelector(selector);
+      const el = deepQuery(selector);
       if (!el) return { found: false };
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return { found: true };

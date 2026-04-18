@@ -20,7 +20,7 @@ jobs:
           node-version: '18'
 
       - name: Install Dependencies
-        run: npm install
+        run: bun install
         working-directory: server
 
       - name: Deploy to Cloudflare Workers

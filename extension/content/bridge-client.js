@@ -1,4 +1,28 @@
 /**
+ * ==============================================================================
+ * OpenSIN Component: bridge-client.js
+ * ==============================================================================
+ * 
+ * DESCRIPTION / BESCHREIBUNG:
+ * Source file for the OpenSIN ecosystem.
+ * 
+ * WHY IT EXISTS / WARUM ES EXISTIERT:
+ * Essential logic for autonomous agent cooperation.
+ * 
+ * RULES / REGELN:
+ * 1. EXTENSIVE LOGGING: Every function call must be traceable.
+ * 2. NO ASSUMPTIONS: Validate all inputs and external states.
+ * 3. SECURITY FIRST: Never leak credentials or session data.
+ * 
+ * CONSEQUENCES / KONSEQUENZEN:
+ * Incorrect modification may disrupt agent communication or task execution.
+ * 
+ * AUTHOR: SIN-Zeus / A2A Fleet
+ * ==============================================================================
+ */
+
+
+/**
  * OpenSIN Bridge — Content Script (DOM Bridge)
  *
  * This is a THIN CLIENT. It contains ZERO business logic.
@@ -17,18 +41,32 @@
   const JITTER_MIN = 2000; // ms
   const JITTER_MAX = 5500; // ms
 
+  // The shared helper may or may not be present depending on how this file is
+  // loaded during local experiments, so we keep it optional and never let its
+  // absence break the legacy extraction path.
+  const deterministicPrimitives = globalThis.__OpenSINDeterministicPrimitives || null;
+
   // --- DOM Extraction (no business logic — just data) ---
 
   function extractPageData() {
-    return {
+    const buttons = extractButtons();
+    const payload = {
       url: window.location.href,
       title: document.title,
       timestamp: Date.now(),
       forms: extractForms(),
-      buttons: extractButtons(),
+      buttons,
       links: extractLinks(),
       text_content: document.body?.innerText?.substring(0, 5000) || '',
     };
+
+    // Deterministic metadata is additive: it enriches the snapshot for the
+    // runtime without changing the legacy shape expected by current callers.
+    if (deterministicPrimitives?.buildDeterministicPrimitivePayload) {
+      payload.deterministic_primitives = deterministicPrimitives.buildDeterministicPrimitivePayload(payload, window.location.href);
+    }
+
+    return payload;
   }
 
   function extractForms() {
@@ -52,8 +90,12 @@
   function extractButtons() {
     const buttons = [];
     document.querySelectorAll('button, [role="button"], input[type="submit"]').forEach(el => {
+      // Input-based submit controls frequently expose their visible label via
+      // .value instead of textContent, so we preserve both for deterministic
+      // matching and for any downstream debug visibility.
       buttons.push({
-        text: el.textContent?.trim()?.substring(0, 100) || '',
+        text: (el.textContent || el.value || '').trim().substring(0, 100),
+        value: typeof el.value === 'string' ? el.value.substring(0, 100) : '',
         id: el.id || '',
         selector: generateSelector(el),
         visible: el.offsetParent !== null,

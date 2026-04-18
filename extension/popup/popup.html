@@ -73,7 +73,9 @@
     </div>
 
     <div class="footer">
-      <p>OpenSIN-AI v1.0.0</p>
+      <!-- WHY: version is injected dynamically by popup.js via chrome.runtime.getManifest().version
+           so it always matches manifest.json and never goes stale -->
+      <p id="bridge-version">OpenSIN Bridge</p>
     </div>
   </div>
 

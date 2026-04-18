@@ -1,4 +1,36 @@
+/**
+ * ==============================================================================
+ * OpenSIN Component: popup.js
+ * ==============================================================================
+ * 
+ * DESCRIPTION / BESCHREIBUNG:
+ * Source file for the OpenSIN ecosystem.
+ * 
+ * WHY IT EXISTS / WARUM ES EXISTIERT:
+ * Essential logic for autonomous agent cooperation.
+ * 
+ * RULES / REGELN:
+ * 1. EXTENSIVE LOGGING: Every function call must be traceable.
+ * 2. NO ASSUMPTIONS: Validate all inputs and external states.
+ * 3. SECURITY FIRST: Never leak credentials or session data.
+ * 
+ * CONSEQUENCES / KONSEQUENZEN:
+ * Incorrect modification may disrupt agent communication or task execution.
+ * 
+ * AUTHOR: SIN-Zeus / A2A Fleet
+ * ==============================================================================
+ */
+
+
 const $ = (id) => document.getElementById(id);
+
+// Inject dynamic version from manifest.json immediately on load.
+// This ensures the version in the popup footer always matches the installed extension.
+const versionEl = document.getElementById('bridge-version');
+if (versionEl) {
+  const { version } = chrome.runtime.getManifest();
+  versionEl.textContent = `OpenSIN Bridge v${version}`;
+}
 
 const views = {
   login: $('login-view'),
