@@ -125,6 +125,22 @@ npm run deploy:server
 npm run ext:package
 ```
 
+## Network Correlation Export
+
+OpenSIN now captures `fetch` and `XMLHttpRequest` directly in the page's **MAIN world** at `document_start` so network payload previews can be correlated with browser-observed request metadata.
+
+- The injector performs passive MAIN-world capture in `extension/content/injector.js`.
+- The MV3 service worker preserves the existing `chrome.webRequest` log and now also stores validated MAIN-world `NETWORK_EVENT` messages.
+- `export_recorded_session` emits the stable OpenSIN session export schema documented in [`docs/SESSION_EXPORT_SCHEMA.md`](docs/SESSION_EXPORT_SCHEMA.md).
+
+## Testing
+
+```bash
+npm test
+```
+
+This branch adds targeted tests for MAIN-world fetch/XHR capture plus the stable session export schema.
+
 ## License
 
 **PROPRIETARY** - All rights reserved. This software is NOT open source.
