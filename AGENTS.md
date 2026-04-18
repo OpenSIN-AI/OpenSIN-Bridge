@@ -61,3 +61,11 @@ Dieses Mandat gilt für:
 ## 4. ZUSAMMENFASSUNG IN EINEM SATZ
 
 **KEIN EINZIGER KLICK, KEIN EINZIGER TASTENDRUCK, KEINE EINZIGE URL, KEINE EINZIGE WEB-AKTION OHNE DASS DAS VISION-MODELL VORHER EINEN SCREENSHOT DES GESAMTEN BILDSCHIRMS ANALYSIERT UND MIT "PROCEED" BESTÄTIGT HAT. PUNKT. KEINE AUSNAHMEN. NIEMALS. WEDER JETZT NOCH IN ZUKUNFT.**
+
+## Boundary Guidance for Agents
+
+When modifying this repo:
+
+- Prefer shared bridge protocol, extension/server contract, and authenticated-session transport work.
+- Do not move worker-specific monetization or survey logic into the bridge.
+- Do not redefine product, docs, or architecture ownership from here.
