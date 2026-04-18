@@ -133,3 +133,20 @@ The server-side code is trade secret material and must NEVER be published public
 ---
 
 *OpenSIN-AI - Autonomous AI Agent Ecosystem*
+
+
+## Behavior Timeline Capture
+
+OpenSIN-Bridge now includes a core behavior-timeline capture layer for issue set #17 / #21 / #24.
+
+- **Durable storage:** session events are written into an IndexedDB-backed event store in the MV3 service worker.
+- **Content-side capture:** the MAIN-world injector emits compact events for clicks, debounced inputs, form submits, and navigation markers.
+- **Performance controls:** click throttling, input debouncing, short-window navigation dedupe, buffered flushes, and bounded IndexedDB batch sizes keep capture lightweight.
+- **Bridge markers:** `start_recording`, `snapshot`, and `observe` now append marker events into the same session timeline when behavior recording is enabled.
+
+### Verification
+
+```bash
+npm test
+npm run build
+```

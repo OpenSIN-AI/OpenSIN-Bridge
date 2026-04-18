@@ -153,3 +153,13 @@ Chrome Web Store
 - [ ] CORS restricted to extension origin only
 - [ ] CSP headers on all responses
 - [ ] Server code NEVER published to any public repo
+
+
+## 8. Behavior Timeline Capture Core
+
+The extension now maintains a unified behavior timeline in the MV3 layer.
+
+- The **content injector** captures clicks, debounced inputs, form submits, and navigation markers directly from the page context.
+- The **service worker** keeps a session-scoped in-memory buffer and persists bounded batches into **IndexedDB** so session history survives worker restarts.
+- Existing bridge surfaces such as `start_recording`, `snapshot`, and `observe` append marker events into the same timeline, which keeps higher-level observation artifacts aligned with low-level user actions.
+- Privacy-sensitive input values are redacted in the service worker before they are committed to persistent storage.
