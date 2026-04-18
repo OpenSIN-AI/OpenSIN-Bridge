@@ -107,25 +107,25 @@ OpenSIN-Bridge/
 
 ```bash
 # Install dependencies
-npm install
+bun install
 
 # Run extension in dev mode
-npm run ext:dev
+bun run ext:dev
 
 # Run server locally
-npm run server:dev
+bun run server:dev
 
 # Build for production
-npm run build
+bun run build
 
 # Run the deterministic primitive regression suite
-npm run test:deterministic
+bun run test:deterministic
 
 # Deploy server to Cloudflare
-npm run deploy:server
+bun run deploy:server
 
 # Package extension for Chrome Web Store
-npm run ext:package
+bun run ext:package
 ```
 
 ## DOM Discovery Coverage
@@ -144,19 +144,19 @@ The content/injection layer now performs recursive discovery across the reachabl
 
 ### Verification
 
-Run `npm test` to execute the default OpenSIN regression contract. That command now runs every `test/*.test.js` file so newly added issue-scoped regressions are not silently skipped.
+Run `bun test` to execute the default OpenSIN regression contract. That command now runs every `test/*.test.js` file so newly added issue-scoped regressions are not silently skipped.
 
 ## Validation Contract
 
-- `npm test`: default local and PR validation command. Use this before review because it exercises the full checked-in Node test suite.
-- `npm run test:all`: explicit alias for the same full-suite contract. Use this in docs, CI notes, or PR checklists when you want to signal "run everything" without ambiguity.
+- `bun test`: default local and PR validation command. Use this before review because it exercises the full checked-in Node test suite.
+- `bun run test:all`: explicit alias for the same full-suite contract. Use this in docs, CI notes, or PR checklists when you want to signal "run everything" without ambiguity.
 - `node --test test/<surface>.test.js`: focused verification for the surface you are actively changing. Use this while iterating on a specific issue, then finish with `npm test` before claiming the branch is ready.
 
 Examples:
 
 ```bash
-npm test
-npm run test:all
+bun test
+bun run test:all
 node --test test/native-host.test.js
 node --test test/bridge.test.js
 ```
