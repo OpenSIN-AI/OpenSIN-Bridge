@@ -26,7 +26,7 @@ The LLM and Persona logic lives in Cloudflare Workers. Do not deploy the `extens
 
 ```bash
 # 1. Install Wrangler CLI
-npm install -g wrangler
+bun install -g wrangler
 
 # 2. Authenticate
 wrangler login
@@ -39,13 +39,13 @@ wrangler secret put STRIPE_WEBHOOK_SECRET
 wrangler secret put OPENAI_API_KEY
 
 # 4. Deploy to Edge (api.opensin.ai)
-npm run deploy:server
+bun run deploy:server
 ```
 
 ## 3. Chrome Web Store (The Thin Client)
 The extension itself is free to download but useless without a subscription.
 ```bash
 # Zip the extension
-npm run ext:package
+bun run ext:package
 ```
 Upload the resulting `opensin-bridge-extension.zip` to the Chrome Developer Dashboard. Set the price to **Free**, as billing is handled entirely by our Stripe/Supabase backend.

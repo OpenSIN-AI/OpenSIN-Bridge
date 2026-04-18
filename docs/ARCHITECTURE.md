@@ -8,8 +8,8 @@ OpenSIN-Bridge is a paid SaaS product (5 EUR/month) that provides autonomous bro
 
 The key insight: **Chrome extensions cannot protect source code** (Google forbids obfuscation, Manifest V3 forbids remote code loading). Therefore, we split the product into:
 
-- **Extension (Thin Client):** A dumb shell that extracts DOM, displays UI, and executes actions. This code is visible to users — and that's fine, because it contains zero business logic.
-- **Server (Secret Sauce):** All intelligence, LLM decision-making, anti-detection algorithms, persona engines, and study evaluation logic lives exclusively on our Cloudflare Workers. This code never leaves our infrastructure.
+- **Extension (Thin Client + Deterministic Runtime):** The extension still stays thin, but it now exposes a tiny evidence-based deterministic primitive layer for known UI controls such as Save / Continue / Submit. This code is visible to users — and that is fine because it contains no secrets and only bounded rules.
+- **Server (Adaptive Fallback):** Cloudflare Workers still own the adaptive path, persona logic, and study evaluation. The server is now invoked only after the deterministic layer declines to act, which reduces unnecessary inference while preserving the existing fallback behavior.
 
 ## 2. Threat Model
 
@@ -58,7 +58,8 @@ All communication happens via HTTPS REST API to Cloudflare Workers.
 POST /api/v1/decide
   Body: { dom_snapshot, current_url, study_id, context }
   Auth: Bearer JWT
-  Response: { action: "click", selector: "#submit-btn", delay: 3.2 }
+  Response: { action: "click", selector: "#submit-btn", deterministic: true }   // when a known primitive matches
+           { action: "click", selector: "#submit-btn", delay: 3.2 }             // when the adaptive fallback is needed
 
 POST /api/v1/evaluate-study
   Body: { study_title, study_description, reward, duration }
@@ -66,9 +67,10 @@ POST /api/v1/evaluate-study
   Response: { accept: true, reasoning: "Good reward/time ratio", risk: "low" }
 
 POST /api/v1/persona
-  Body: { question_text, question_type, options }
+  Body: { question_text, question_type, options, current_url }
   Auth: Bearer JWT
-  Response: { answer: "Option B", confidence: 0.92 }
+  Response: { answer: "No", confidence: 1, deterministic: true }   // when a known Prolific rule matches
+           { answer: "Option B", confidence: 0.92 }                 // fallback path
 
 GET /api/v1/subscription/status
   Auth: Bearer JWT
@@ -83,15 +85,23 @@ POST /api/v1/auth/refresh
   Response: { jwt, refresh_token }
 ```
 
-### Server-Side Only (Never Exposed)
+### Runtime Split: Deterministic First, Adaptive Second
 
 These functions exist ONLY on the server and are NEVER callable from the extension:
 
-- `llm_decide(context)` - The core LLM decision engine
+- `llm_decide(context)` - The adaptive fallback once deterministic primitives decline
 - `evaluate_risk(study)` - Anti-detection risk scorer
 - `generate_persona(profile)` - Dynamic persona generator
 - `humanize_timing(action)` - Human emulation delay calculator
 - `check_anti_detection(fingerprint)` - Fingerprint analysis
+
+The extension-side deterministic runtime is intentionally limited to:
+
+- matching explicit Save / Continue / Submit button families
+- consulting a tiny shared registry of approved site-specific UI shapes before any adaptive step
+- surfacing deterministic metadata inside DOM snapshots, including the matched site-profile when a shape rule fires
+- bypassing screenshot-based guessing when a known button can be resolved from the live accessibility tree
+- returning `null` immediately for unknown or ambiguous elements so the existing adaptive fallback remains untouched
 
 ## 5. Deployment Architecture
 
@@ -139,12 +149,41 @@ Chrome Web Store
 | **Total per user** | **~0.65 EUR** |
 | **Margin per user** | **~4.35 EUR (87%)** |
 
-## 7. Security Checklist
+## 7. Runtime Self-Healing Observation Loop
+
+The bridge runtime now verifies `click_ref` interactions inside the extension instead of treating a successful event dispatch as proof that the page changed.
+
+### Verification flow
+
+1. Capture a **before** observation snapshot with accessibility-tree state plus a CDP screenshot.
+2. Execute the primary interaction strategy (`cdp_mouse`).
+3. Capture an **after** observation snapshot.
+4. Score the result with deterministic signals:
+   - DOM diff from the accessibility tree
+   - visual diff from screenshot length + checksum heuristics
+   - URL change
+   - title change
+5. If all signals remain unchanged, classify the attempt as a **no-op** and automatically retry with fallback strategies (`dom_click`, then `dom_dispatch`).
+6. Persist the attempt evidence and expose it through `get_interaction_proof`.
+
+### Boundary split
+
+- **`service_worker.js`** collects snapshots, executes strategies, and stores proof bundles.
+- **`observation-runtime.mjs`** stays pure and testable; it only compares evidence and classifies outcomes.
+- **`server.js`** advertises the new runtime surfaces so MCP clients can call them directly.
+
+## 8. Human-Entropy Interaction Hardening
+
+- All service-worker click, hover, iframe, CAPTCHA, and vision interaction paths must route through shared human-entropy helpers.
+- The shared helpers must emit movement, coordinate jitter, non-zero dwell, and non-deterministic timing instead of instant center clicks.
+- Raw `mousePressed` / `mouseReleased` CDP sequences are allowed only inside the shared helper so tests can detect handler-level regressions immediately.
+
+## 9. Security Checklist
 
 - [ ] Extension contains ZERO API keys
 - [ ] Extension contains ZERO LLM prompts
-- [ ] Extension contains ZERO business logic
-- [ ] All decisions made server-side
+- [ ] Extension contains ZERO secrets and only bounded deterministic primitives
+- [ ] Unknown or ambiguous decisions still fall back to the server-side adaptive path
 - [ ] JWT tokens expire in 15 minutes
 - [ ] Refresh tokens are rotated on use
 - [ ] Rate limiting: 100 requests/hour per user

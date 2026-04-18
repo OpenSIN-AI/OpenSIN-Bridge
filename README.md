@@ -110,19 +110,22 @@ OpenSIN-Bridge/
 
 ```bash
 # Install dependencies
-npm install
+bun install
 
 # Run extension in dev mode
-npm run ext:dev
+bun run ext:dev
 
 # Run server locally
-npm run server:dev
+bun run server:dev
 
 # Build for production
-npm run build
+bun run build
+
+# Run the deterministic primitive regression suite
+bun run test:deterministic
 
 # Deploy server to Cloudflare
-npm run deploy:server
+bun run deploy:server
 
 # Package extension for Chrome Web Store
 npm run ext:package
@@ -155,3 +158,11 @@ The server-side code is trade secret material and must NEVER be published public
 ---
 
 *OpenSIN-AI - Autonomous AI Agent Ecosystem*
+
+---
+
+## 🚨 MISSION CRITICAL MANDATE: NO AUTORUN. NO BLIND CLICKS.
+
+Please see the absolute, top-priority rulebook in [`AGENTS.md`](./AGENTS.md). 
+**ANY automation, script, or agent utilizing this bridge MUST implement the 10-step Vision Gate Loop.**
+Escalating click chains without interim vision checks are strictly **banned**. EVERY SINGLE STAGE must be visually verified.

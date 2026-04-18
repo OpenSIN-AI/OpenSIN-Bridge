@@ -1,3 +1,21 @@
+<!--
+  ==============================================================================
+  OpenSIN Bridge - UI Component
+  ==============================================================================
+  
+  DESCRIPTION / BESCHREIBUNG:
+  This HTML file provides the user interface for the OpenSIN Bridge.
+  It displays the connection status, version, and tools count.
+  
+  WHY IT IS IMPORTANT:
+  Users must be able to visually verify that the extension is "Connected" (Green).
+  Without this visual feedback, debugging connection issues is impossible.
+  
+  CONSEQUENCES:
+  Do not remove the status indicators. Agents rely on the user confirming the status.
+  ==============================================================================
+-->
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -14,7 +32,7 @@
 <body>
   <h1>OpenSIN Bridge</h1>
   <div id="status" class="status disconnected">Checking connection...</div>
-  <div class="info">v4.0.0 — Agent Vision + Browser Automation</div>
+  <div id="versionInfo" class="info"></div>
   <script src="popup.js"></script>
 </body>
 </html>

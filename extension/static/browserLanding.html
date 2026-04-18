@@ -1,3 +1,21 @@
+<!--
+  ==============================================================================
+  OpenSIN Bridge - UI Component
+  ==============================================================================
+  
+  DESCRIPTION / BESCHREIBUNG:
+  This HTML file provides the user interface for the OpenSIN Bridge.
+  It displays the connection status, version, and tools count.
+  
+  WHY IT IS IMPORTANT:
+  Users must be able to visually verify that the extension is "Connected" (Green).
+  Without this visual feedback, debugging connection issues is impossible.
+  
+  CONSEQUENCES:
+  Do not remove the status indicators. Agents rely on the user confirming the status.
+  ==============================================================================
+-->
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -128,7 +146,7 @@
         <span class="quick-link-label">GitHub</span>
         <span class="quick-link-desc">Repositories</span>
       </a>
-      <a class="quick-link" href="https://a2a.delqhi.com">
+      <a class="quick-link" href="https://chat.opensin.ai">
         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         <span class="quick-link-label">Dashboard</span>
         <span class="quick-link-desc">Workforce</span>
@@ -140,7 +158,7 @@
       </a>
     </div>
 
-    <div class="footer">OpenSIN Bridge v2.6.0</div>
+    <div id="footerVersion" class="footer"></div>
   </div>
 </body>
 </html>
