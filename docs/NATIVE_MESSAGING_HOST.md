@@ -68,7 +68,7 @@ python3 -m json.tool /tmp/opensin-native-host-test/ai.opensin.bridge.host.json >
 node --test test/native-host.test.js
 ```
 
-Use the targeted command while iterating on the native host surface. Before review, finish with `npm test` (or the explicit alias `npm run test:all`) so the native-host checks run alongside the rest of the OpenSIN regression contract.
+Use the targeted command while iterating on the native host surface. Before review, finish with `bun test` (or the explicit alias `bun run test:all`) so the native-host checks run alongside the rest of the OpenSIN regression contract.
 
 The automated test suite spawns `opensin_host.py`, sends framed JSON messages, verifies `ping`, verifies authenticated fetch behavior, and verifies installer output.
 
