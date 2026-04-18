@@ -4,78 +4,53 @@
  * ==============================================================================
  *
  * DESCRIPTION / BESCHREIBUNG:
- * Content script injector for OpenSIN Bridge.
+ * MAIN-world content script that exposes the OpenSIN bridge API and now also
+ * captures a low-level behavior timeline for future replay / automation mining.
  *
  * WHY IT EXISTS / WARUM ES EXISTIERT:
- * Facilitates DOM interaction and data extraction.
+ * The service worker already knows how to observe pages, record video, and log
+ * requests, but only the page context can see the exact DOM element a user just
+ * clicked, typed into, or submitted. This script therefore emits compact,
+ * privacy-aware behavior events from the DOM side.
  *
- * RULES / REGELN:
- * 1. EXTENSIVE LOGGING: Every function call must be traceable.
- * 2. NO ASSUMPTIONS: Validate all inputs and external states.
- * 3. SECURITY FIRST: Never leak credentials or session data.
+ * PERFORMANCE / WARUM SO GEBAUT:
+ * - Clicks are throttled so one physical interaction does not fan out into
+ *   duplicate synthetic click handlers.
+ * - Inputs are debounced so fast typing produces one bounded event instead of a
+ *   write for every keystroke.
+ * - Navigation markers are deduplicated in short windows to avoid noisy bursts
+ *   from history APIs and browser lifecycle events.
  *
  * CONSEQUENCES / KONSEQUENZEN:
- * If broken, agents lose the ability to 'see' or interact with web pages.
- *
- * AUTHOR: SIN-Zeus / A2A Fleet
+ * If this file breaks, OpenSIN can still query the page, but it loses the core
+ * user-behavior capture signals needed for timeline learning and replay.
  * ==============================================================================
- */
-
-/**
- * ==============================================================================
- * OpenSIN Bridge - Core Component (V4.0.0+)
- * ==============================================================================
- *
- * DESCRIPTION / BESCHREIBUNG:
- * This file is a critical component of the OpenSIN Bridge ecosystem.
- * It enables direct, secure, and reliable communication between the Hugging Face
- * MCP Server and the user's local Chrome browser.
- *
- * ARCHITECTURE / WARUM SO GEBAUT:
- * - We DO NOT use Selenium, Puppeteer, or nodriver here.
- * - We DO NOT launch new Chrome instances with --no-sandbox.
- * - Instead, we use the Native Chrome Extension API (MV3) inside the user's
- *   DEFAULT profile to ensure all cookies, sessions, and extensions remain intact.
- *
- * RULES / REGELN FÜR DIESEN CODE:
- * 1. NO ASSUMPTIONS: Do not assume a tab or window exists. Always verify and handle missing states.
- * 2. EXTENSIVE LOGGING: Every action must be logged. Silent failures are prohibited.
- * 3. FALLBACKS: If an API fails (e.g. tabs.create without a window), fallback gracefully (e.g. create a window).
- *
- * CONSEQUENCES / KONSEQUENZEN WENN GEÄNDERT:
- * - If you break the WebSocket connection here, the entire autonomous agent fleet goes blind.
- * - If you change security policies (CSP), the extension might get banned by Chrome.
- *
- * AUTHOR: SIN-Zeus / A2A Team
- * ==============================================================================
- */
-
-/**
- * OpenSIN Bridge v4.0.0 — Content Script Injector
- * Runs on <all_urls> at document_start in MAIN world
- *
- * This is the OpenSIN content script that:
- * - Injects the SIN API into every page's window object
- * - Listens for commands from the background service worker
- * - Provides DOM-level automation capabilities
- * - Bypasses CSP by running in MAIN world
- *
- * SECURITY: All mutating methods are nonce-gated. Only code that
- * knows the per-page nonce (retrieved via chrome.scripting.executeScript)
- * can invoke click/type/fillForm/etc. Read-only methods remain open.
  */
 
 (function() {
   'use strict';
 
-  // Prevent double-injection because duplicate bridge objects would create
-  // conflicting nonces and inconsistent DOM helper behavior across the page.
   if (window.__SIN_BRIDGE_INJECTED__) return;
   window.__SIN_BRIDGE_INJECTED__ = true;
 
-  // Per-page nonce — generated fresh on every injection so mutating methods can
-  // be gated without exposing a predictable token to the page context.
   const _sinNonce = crypto.randomUUID();
+  const BRIDGE_VERSION = typeof chrome !== 'undefined' && chrome.runtime?.getManifest
+    ? chrome.runtime.getManifest().version
+    : '4.0.0';
+
+  const CAPTURE_CONFIG = {
+    clickThrottleMs: 250,
+    inputDebounceMs: 400,
+    navigationThrottleMs: 250,
+    textLimit: 120,
+    selectorTrailLimit: 4,
+  };
+
+  const captureState = {
+    clicks: new Map(),
+    inputs: new Map(),
+    navigations: new Map(),
+  };
 
   // Poll interval used by waitFor(). Polling is more robust than a single
   // document-root MutationObserver because shadow roots and iframe documents can
@@ -94,299 +69,238 @@
     if (nonce !== _sinNonce) throw new Error('Unauthorized: invalid bridge nonce');
   }
 
-  /**
-   * Normalize any DOM-like root into a queryable root.
-   *
-   * Supported roots in real browsers are Document, Element, and ShadowRoot.
-   * Tests may provide minimal DOM-like objects; therefore we rely on capability
-   * checks instead of constructor checks.
-   */
-  function normalizeRoot(root) {
-    if (root && typeof root.querySelectorAll === 'function') return root;
-    return document;
+  function truncateText(value, limit = CAPTURE_CONFIG.textLimit) {
+    return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
   }
 
-  /**
-   * Safely determine whether an element is visible enough to be actionable.
-   *
-   * We preserve the old offsetParent behavior for backward compatibility, but we
-   * also accept getClientRects() as a fallback because some visible elements in
-   * shadow DOM / fixed-position layouts legitimately have offsetParent === null.
-   */
-  function isElementVisible(element) {
+  function normalizeContext(context) {
+    return context && typeof context.querySelectorAll === 'function' ? context : document;
+  }
+
+  function safeSendRuntimeMessage(message) {
+    try {
+      if (!chrome?.runtime?.sendMessage) return false;
+      chrome.runtime.sendMessage(message, () => {
+        void chrome.runtime.lastError;
+      });
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function isVisible(element) {
     if (!element) return false;
-
+    if (element.offsetParent !== null) return true;
     try {
-      if (element.offsetParent !== null) return true;
-    } catch (error) {
-      // Ignore offsetParent failures and continue with geometric visibility.
+      return typeof element.getClientRects === 'function' && element.getClientRects().length > 0;
+    } catch (_error) {
+      return false;
     }
+  }
 
-    try {
-      if (typeof element.getClientRects === 'function' && element.getClientRects().length > 0) {
-        return true;
-      }
-    } catch (error) {
-      // Ignore geometry failures and report not visible below.
+  function buildElementLabel(element) {
+    if (!element || !element.tagName) return 'unknown';
+    const tag = String(element.tagName).toLowerCase();
+    const id = element.id ? `#${element.id}` : '';
+    const name = element.name ? `[name="${truncateText(element.name, 40)}"]` : '';
+    const type = element.type ? `[type="${truncateText(element.type, 24)}"]` : '';
+    return `${tag}${id}${name}${type}`;
+  }
+
+  function buildSelectorTrail(element) {
+    const parts = [];
+    let current = element;
+    while (current && current.tagName && parts.length < CAPTURE_CONFIG.selectorTrailLimit) {
+      parts.unshift(buildElementLabel(current));
+      current = current.parentElement || null;
     }
+    return parts.join(' > ');
+  }
 
+  function buildElementPayload(element) {
+    const text = truncateText(element?.innerText || element?.textContent || element?.value || '');
+    return {
+      tag: element?.tagName ? String(element.tagName).toLowerCase() : 'unknown',
+      id: element?.id || '',
+      name: element?.name || '',
+      inputType: element?.type || '',
+      text,
+      selectorTrail: buildSelectorTrail(element),
+      visible: isVisible(element),
+      href: element?.href || '',
+      action: element?.action || element?.formAction || '',
+    };
+  }
+
+  function buildTargetKey(element) {
+    return [
+      buildElementLabel(element),
+      truncateText(element?.placeholder || '', 40),
+      truncateText(element?.ariaLabel || '', 40),
+      buildSelectorTrail(element),
+    ].join('::');
+  }
+
+  function emitBehaviorEvent(payload) {
+    return safeSendRuntimeMessage({
+      _sinBridgeType: 'BEHAVIOR_EVENT',
+      payload: {
+        ...payload,
+        url: window.location.href,
+        title: document.title,
+        timestamp: Date.now(),
+      },
+    });
+  }
+
+  function shouldThrottle(map, key, windowMs) {
+    const now = Date.now();
+    const lastSeenAt = map.get(key) || 0;
+    if (now - lastSeenAt < windowMs) return true;
+    map.set(key, now);
     return false;
   }
 
-  /**
-   * Small helper to produce stable, short text snippets for snapshots and debug
-   * payloads. The bridge needs representative text, not full page dumps.
-   */
-  function truncateText(value, limit = SNAPSHOT_TEXT_LIMIT) {
-    return String(value || '').trim().slice(0, limit);
+  function handleClick(event) {
+    const target = event?.target?.closest ? event.target.closest('button, a[href], input, textarea, select, [role="button"], label') : event?.target;
+    if (!target) return false;
+
+    const key = buildTargetKey(target);
+    if (shouldThrottle(captureState.clicks, key, CAPTURE_CONFIG.clickThrottleMs)) {
+      return false;
+    }
+
+    return emitBehaviorEvent({
+      type: 'CLICK',
+      trusted: event?.isTrusted !== false,
+      target: buildElementPayload(target),
+    });
   }
 
-  /**
-   * Build a human-readable location label describing where an element was found.
-   *
-   * This is intentionally descriptive rather than CSS-selector-precise. The goal
-   * is to tell operators whether an element came from the main document, a shadow
-   * root, or a same-origin iframe without creating brittle selector strings.
-   */
-  function buildLocationLabel(trail) {
-    if (!Array.isArray(trail) || trail.length === 0) return 'document';
-    return trail.join(' > ');
+  function flushInputEvent(key) {
+    const pending = captureState.inputs.get(key);
+    if (!pending) return false;
+
+    captureState.inputs.delete(key);
+    const { element, trusted, eventType } = pending;
+
+    return emitBehaviorEvent({
+      type: 'INPUT',
+      trusted,
+      eventType,
+      target: buildElementPayload(element),
+      name: element?.name || '',
+      inputType: element?.type || '',
+      value: truncateText(element?.value || ''),
+    });
   }
 
-  /**
-   * Get same-origin iframe/frame document if accessible.
-   *
-   * Cross-origin frames throw on access in real browsers. We catch that and turn
-   * it into explicit limitation metadata so the snapshot can explain what was
-   * skipped instead of silently pretending the DOM is complete.
-   */
-  function getAccessibleFrameDocument(frameElement, limitations) {
-    try {
-      const frameDocument = frameElement.contentDocument || null;
-      if (!frameDocument) {
-        limitations.push({
-          type: 'iframe-unavailable',
-          location: frameElement.src || '(inline frame)',
-          reason: 'Frame document is not yet available.',
-        });
-        return null;
-      }
-      return frameDocument;
-    } catch (error) {
-      limitations.push({
-        type: 'iframe-cross-origin',
-        location: frameElement.src || '(inline frame)',
-        reason: error && error.message ? error.message : 'Cross-origin iframe access denied.',
-      });
-      return null;
+  function handleInput(event) {
+    const target = event?.target;
+    if (!target || !target.tagName) return false;
+
+    const tagName = String(target.tagName).toLowerCase();
+    if (!['input', 'textarea', 'select'].includes(tagName)) return false;
+
+    const key = buildTargetKey(target);
+    const previous = captureState.inputs.get(key);
+    if (previous?.timer) clearTimeout(previous.timer);
+
+    const timer = setTimeout(() => {
+      flushInputEvent(key);
+    }, CAPTURE_CONFIG.inputDebounceMs);
+
+    captureState.inputs.set(key, {
+      element: target,
+      trusted: event?.isTrusted !== false,
+      eventType: event?.type || 'input',
+      timer,
+    });
+
+    return true;
+  }
+
+  function flushPendingInputs() {
+    for (const key of Array.from(captureState.inputs.keys())) {
+      const pending = captureState.inputs.get(key);
+      if (pending?.timer) clearTimeout(pending.timer);
+      flushInputEvent(key);
     }
   }
 
-  /**
-   * Walk every reachable, same-origin DOM surface below the provided root.
-   *
-   * Reachable means:
-   * - the light DOM of the starting root
-   * - any open shadow roots attached to descendants
-   * - any same-origin iframe/frame documents reachable from descendants
-   *
-   * Non-reachable surfaces are reported via limitation metadata:
-   * - closed shadow roots cannot be traversed from page JS by design
-   * - cross-origin iframe documents are blocked by the browser security model
-   */
-  function collectDeepElements(root) {
-    const normalizedRoot = normalizeRoot(root);
-    const elements = [];
-    const limitations = [];
-    const visitedRoots = new Set();
-    const visitedElements = new Set();
+  function handleSubmit(event) {
+    const form = event?.target?.tagName && String(event.target.tagName).toLowerCase() === 'form'
+      ? event.target
+      : event?.target?.closest
+        ? event.target.closest('form')
+        : null;
 
-    function visitRoot(currentRoot, trail) {
-      if (!currentRoot || visitedRoots.has(currentRoot)) return;
-      visitedRoots.add(currentRoot);
+    if (!form) return false;
 
-      let descendants = [];
-      try {
-        descendants = Array.from(currentRoot.querySelectorAll('*'));
-      } catch (error) {
-        limitations.push({
-          type: 'root-query-failed',
-          location: buildLocationLabel(trail),
-          reason: error && error.message ? error.message : 'Unable to query this DOM root.',
-        });
-        return;
-      }
+    flushPendingInputs();
 
-      for (const element of descendants) {
-        if (!visitedElements.has(element)) {
-          visitedElements.add(element);
-          elements.push({
-            element,
-            location: buildLocationLabel(trail),
-          });
-        }
-
-        if (element.shadowRoot) {
-          const shadowTrail = trail.concat(`${element.tagName.toLowerCase()}::shadow`);
-          visitRoot(element.shadowRoot, shadowTrail);
-        }
-
-        const tagName = typeof element.tagName === 'string' ? element.tagName.toLowerCase() : '';
-        if (tagName === 'iframe' || tagName === 'frame') {
-          const frameDocument = getAccessibleFrameDocument(element, limitations);
-          if (frameDocument) {
-            const frameLabel = element.id
-              ? `${tagName}#${element.id}`
-              : `${tagName}[src="${element.getAttribute && element.getAttribute('src') ? element.getAttribute('src') : element.src || ''}"]`;
-            visitRoot(frameDocument, trail.concat(frameLabel));
-          }
-        }
-      }
-    }
-
-    visitRoot(normalizedRoot, ['document']);
-
-    return { elements, limitations };
+    return emitBehaviorEvent({
+      type: 'FORM_SUBMIT',
+      trusted: event?.isTrusted !== false,
+      target: buildElementPayload(form),
+      formAction: form.action || '',
+      method: (form.method || 'get').toLowerCase(),
+    });
   }
 
-  /**
-   * Find the first reachable element matching a selector across light DOM,
-   * nested open shadow roots, and same-origin iframe documents.
-   */
-  function deepQuery(selector, root) {
-    if (!selector || typeof selector !== 'string') return null;
-
-    const { elements } = collectDeepElements(root);
-    for (const entry of elements) {
-      try {
-        if (typeof entry.element.matches === 'function' && entry.element.matches(selector)) {
-          return entry.element;
-        }
-      } catch (error) {
-        // Invalid selectors should behave like native querySelector and bubble.
-        throw error;
-      }
+  function recordNavigationMarker(marker, extra = {}) {
+    const key = `${marker}:${window.location.href}`;
+    if (shouldThrottle(captureState.navigations, key, CAPTURE_CONFIG.navigationThrottleMs)) {
+      return false;
     }
 
-    return null;
+    flushPendingInputs();
+
+    return emitBehaviorEvent({
+      type: 'NAVIGATION',
+      marker,
+      ...extra,
+    });
   }
 
-  /**
-   * Find all reachable elements matching a selector across light DOM, open
-   * shadow roots, and same-origin iframe documents.
-   */
-  function deepQueryAll(selector, root) {
-    if (!selector || typeof selector !== 'string') return [];
+  function installBehaviorCaptureHooks() {
+    document.addEventListener('click', handleClick, { capture: true, passive: true });
+    document.addEventListener('input', handleInput, { capture: true, passive: true });
+    document.addEventListener('change', handleInput, { capture: true, passive: true });
+    document.addEventListener('submit', handleSubmit, { capture: true, passive: true });
 
-    const matches = [];
-    const { elements } = collectDeepElements(root);
-    for (const entry of elements) {
-      try {
-        if (typeof entry.element.matches === 'function' && entry.element.matches(selector)) {
-          matches.push(entry.element);
-        }
-      } catch (error) {
-        throw error;
-      }
+    const originalPushState = window.history?.pushState?.bind(window.history);
+    if (originalPushState) {
+      window.history.pushState = function(...args) {
+        const result = originalPushState(...args);
+        recordNavigationMarker('history-push-state');
+        return result;
+      };
     }
 
-    return matches;
+    const originalReplaceState = window.history?.replaceState?.bind(window.history);
+    if (originalReplaceState) {
+      window.history.replaceState = function(...args) {
+        const result = originalReplaceState(...args);
+        recordNavigationMarker('history-replace-state');
+        return result;
+      };
+    }
+
+    window.addEventListener('hashchange', () => recordNavigationMarker('hashchange'), { passive: true });
+    window.addEventListener('popstate', () => recordNavigationMarker('popstate'), { passive: true });
+    window.addEventListener('beforeunload', () => recordNavigationMarker('beforeunload'), { passive: true });
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => recordNavigationMarker('dom-content-loaded'), { once: true, passive: true });
+    } else {
+      recordNavigationMarker('document-ready');
+    }
+
+    window.addEventListener('load', () => recordNavigationMarker('window-load'), { once: true, passive: true });
+    recordNavigationMarker('initial-document');
   }
-
-  /**
-   * Like deepQueryAll(), but preserves discovery metadata for snapshots.
-   */
-  function deepDiscover(selector, root) {
-    if (!selector || typeof selector !== 'string') {
-      return { matches: [], limitations: [] };
-    }
-
-    const matches = [];
-    const { elements, limitations } = collectDeepElements(root);
-    for (const entry of elements) {
-      try {
-        if (typeof entry.element.matches === 'function' && entry.element.matches(selector)) {
-          matches.push(entry);
-        }
-      } catch (error) {
-        throw error;
-      }
-    }
-
-    return { matches, limitations };
-  }
-
-  /**
-   * Create a snapshot of the visible actionable page state.
-   *
-   * This snapshot now includes actionable elements from:
-   * - the main document
-   * - nested open shadow roots
-   * - same-origin iframes/frames
-   *
-   * It does NOT include closed shadow roots because browsers intentionally hide
-   * them from page JavaScript. That limitation is documented, not guessed away.
-   */
-  function buildSnapshot() {
-    const linkDiscovery = deepDiscover('a[href]');
-    const inputDiscovery = deepDiscover('input, textarea, select');
-    const buttonDiscovery = deepDiscover('button, [role="button"], input[type="submit"]');
-
-    const limitations = Array.from(new Map(
-      [
-        ...linkDiscovery.limitations,
-        ...inputDiscovery.limitations,
-        ...buttonDiscovery.limitations,
-      ].map((entry) => [`${entry.type}:${entry.location}:${entry.reason}`, entry])
-    ).values());
-
-    const snapshot = {
-      title: document.title,
-      url: window.location.href,
-      readyState: document.readyState,
-      links: linkDiscovery.matches.map(({ element, location }) => ({
-        href: element.href,
-        text: truncateText(element.textContent),
-        location,
-      })),
-      inputs: inputDiscovery.matches.map(({ element, location }) => ({
-        tag: element.tagName.toLowerCase(),
-        type: element.type,
-        name: element.name,
-        id: element.id,
-        placeholder: element.placeholder,
-        visible: isElementVisible(element),
-        location,
-      })),
-      buttons: buttonDiscovery.matches.map(({ element, location }) => ({
-        text: truncateText(element.textContent || element.value),
-        value: typeof element.value === 'string' ? truncateText(element.value) : '',
-        visible: isElementVisible(element),
-        location,
-      })),
-      limitations,
-      notes: [
-        'Open shadow roots are traversed recursively.',
-        'Closed shadow roots remain inaccessible to page JavaScript and are therefore excluded.',
-        'Only same-origin iframe/frame documents are traversed. Cross-origin frames are reported in limitations.',
-      ],
-    };
-
-    // The deterministic metadata is additive so older callers can ignore it
-    // while newer runtimes short-circuit obvious UI interactions.
-    if (deterministicPrimitives?.buildDeterministicPrimitivePayload) {
-      snapshot.deterministicPrimitives = deterministicPrimitives.buildDeterministicPrimitivePayload(snapshot, window.location.href);
-    }
-
-    return snapshot;
-  }
-
-  // ============================================================
-  // SIN API — Injected into page context (MAIN world)
-  // ============================================================
-  const BRIDGE_VERSION = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getManifest
-    ? chrome.runtime.getManifest().version
-    : '4.0.0';
 
   window.__SIN_BRIDGE__ = {
     version: BRIDGE_VERSION,
@@ -394,145 +308,148 @@
     timestamp: Date.now(),
     url: window.location.href,
 
-    // ---- Read-only methods (safe, no nonce needed) ----
-
-    // DOM Query helpers now pierce reachable open shadow roots and same-origin
-    // iframe documents so agents see the same actionable surface as snapshots.
     $(selector, context) {
-      return deepQuery(selector, context);
+      return normalizeContext(context).querySelector(selector);
     },
+
     $$(selector, context) {
-      return deepQueryAll(selector, context);
+      return Array.from(normalizeContext(context).querySelectorAll(selector));
     },
 
-    // Get page snapshot.
     snapshot() {
-      return buildSnapshot();
+      return {
+        title: document.title,
+        url: window.location.href,
+        readyState: document.readyState,
+        links: Array.from(document.querySelectorAll('a[href]')).map((anchor) => ({
+          href: anchor.href,
+          text: truncateText(anchor.textContent, 50),
+        })),
+        inputs: Array.from(document.querySelectorAll('input, textarea, select')).map((element) => ({
+          tag: element.tagName.toLowerCase(),
+          type: element.type,
+          name: element.name,
+          id: element.id,
+          placeholder: element.placeholder,
+          visible: isVisible(element),
+        })),
+        buttons: Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]')).map((element) => ({
+          text: truncateText(element.textContent || element.value, 50),
+          visible: isVisible(element),
+        })),
+      };
     },
 
-    // Get computed styles.
     getStyles(selector) {
-      const el = deepQuery(selector);
-      if (!el) return { found: false };
-      const style = window.getComputedStyle(el);
+      const element = document.querySelector(selector);
+      if (!element) return { found: false };
+      const style = window.getComputedStyle(element);
       return {
         found: true,
         display: style.display,
         visibility: style.visibility,
         opacity: style.opacity,
-        offsetParent: el.offsetParent !== null,
-        rect: el.getBoundingClientRect(),
+        offsetParent: element.offsetParent !== null,
+        rect: element.getBoundingClientRect(),
       };
     },
 
-    // ---- Mutating methods (nonce required) ----
-
-    // Click with full event chain (React-compatible).
     click(nonce, selector) {
       requireNonce(nonce);
-      const el = deepQuery(selector);
-      if (!el) return { found: false };
-      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-      el.click();
-      return { found: true, tag: el.tagName, text: truncateText(el.textContent, 100) };
+      const element = document.querySelector(selector);
+      if (!element) return { found: false };
+      element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      element.click();
+      return { found: true, tag: element.tagName, text: truncateText(element.textContent, 100) };
     },
 
-    // Type text with proper events.
     type(nonce, selector, text, clear = true) {
       requireNonce(nonce);
       if (!selector || typeof selector !== 'string') return { error: 'selector required' };
       if (typeof text !== 'string') return { error: 'text must be a string' };
       if (text.length > 10000) return { error: 'text exceeds 10000 character limit' };
-      const el = deepQuery(selector);
-      if (!el) return { found: false };
-      el.focus();
+      const element = document.querySelector(selector);
+      if (!element) return { found: false };
+      element.focus();
       if (clear) {
-        el.value = '';
-        el.dispatchEvent(new Event('input', { bubbles: true }));
+        element.value = '';
+        element.dispatchEvent(new Event('input', { bubbles: true }));
       }
-      // Simulate typing character by character for realism.
       for (const char of text) {
-        el.value += char;
-        el.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
-        el.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true }));
+        element.value += char;
+        element.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+        element.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true }));
       }
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
       return { found: true, length: text.length };
     },
 
-    // Wait for element.
     waitFor(nonce, selector, timeout = 10000) {
       requireNonce(nonce);
       return new Promise((resolve) => {
-        const startedAt = Date.now();
-
-        function check() {
-          const el = deepQuery(selector);
-          if (el) {
-            return resolve({ found: true, tag: el.tagName });
+        const existing = document.querySelector(selector);
+        if (existing) return resolve({ found: true, tag: existing.tagName });
+        const observer = new MutationObserver(() => {
+          const discovered = document.querySelector(selector);
+          if (discovered) {
+            observer.disconnect();
+            resolve({ found: true, tag: discovered.tagName });
           }
-
-          if (Date.now() - startedAt >= timeout) {
-            return resolve({ found: false });
-          }
-
-          setTimeout(check, WAIT_FOR_POLL_INTERVAL_MS);
-        }
-
-        check();
+        });
+        observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+        setTimeout(() => {
+          observer.disconnect();
+          resolve({ found: false });
+        }, timeout);
       });
     },
 
-    // Override fetch to monitor network.
     interceptFetch(nonce, callback) {
       requireNonce(nonce);
-      const origFetch = window.fetch;
+      const originalFetch = window.fetch;
       window.fetch = async function(...args) {
-        const response = await origFetch.apply(this, args);
+        const response = await originalFetch.apply(this, args);
         if (callback) callback({ url: args[0], status: response.status, method: 'GET' });
         return response;
       };
       return { intercepted: true };
     },
 
-    // Override XMLHttpRequest.
     interceptXHR(nonce, callback) {
       requireNonce(nonce);
-      const origOpen = XMLHttpRequest.prototype.open;
-      const origSend = XMLHttpRequest.prototype.send;
+      const originalOpen = XMLHttpRequest.prototype.open;
+      const originalSend = XMLHttpRequest.prototype.send;
       XMLHttpRequest.prototype.open = function(method, url) {
         this._sin_method = method;
         this._sin_url = url;
-        return origOpen.apply(this, arguments);
+        return originalOpen.apply(this, arguments);
       };
       XMLHttpRequest.prototype.send = function(body) {
         if (callback) callback({ url: this._sin_url, method: this._sin_method, body });
-        return origSend.apply(this, arguments);
+        return originalSend.apply(this, arguments);
       };
       return { intercepted: true };
     },
 
-    // Anti-detection: remove automation indicators.
     stealth(nonce) {
       requireNonce(nonce);
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
       delete window.document.$cdc_asdjflasutopfhvcZLmcfl_;
       delete window.document.$chrome_asyncScriptInfo;
-      const origQuery = window.navigator.permissions?.query;
-      if (origQuery) {
+      const originalQuery = window.navigator.permissions?.query;
+      if (originalQuery) {
         window.navigator.permissions.query = (parameters) => {
           return parameters.name === 'notifications'
             ? Promise.resolve({ state: Notification.permission })
-            : origQuery(parameters);
+            : originalQuery(parameters);
         };
       }
       return { stealth: true };
     },
 
-    // Form auto-fill.
     fillForm(nonce, data) {
       requireNonce(nonce);
       if (!data || typeof data !== 'object' || Array.isArray(data)) return { error: 'data must be an object' };
@@ -540,15 +457,21 @@
       if (entries.length > 50) return { error: 'data exceeds 50 fields limit' };
       const results = {};
       for (const [key, value] of entries) {
-        if (typeof key !== 'string' || key.length > 256) { results[key] = { filled: false, error: 'invalid key' }; continue; }
-        if (typeof value !== 'string' || value.length > 10000) { results[key] = { filled: false, error: 'invalid value' }; continue; }
+        if (typeof key !== 'string' || key.length > 256) {
+          results[key] = { filled: false, error: 'invalid key' };
+          continue;
+        }
+        if (typeof value !== 'string' || value.length > 10000) {
+          results[key] = { filled: false, error: 'invalid value' };
+          continue;
+        }
         const safeKey = key.replace(/["\\]/g, '\\$&');
-        const el = deepQuery(`[name="${safeKey}"], [id="${safeKey}"], [data-field="${safeKey}"]`);
-        if (el) {
-          el.focus();
-          el.value = value;
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
+        const element = document.querySelector(`[name="${safeKey}"], [id="${safeKey}"], [data-field="${safeKey}"]`);
+        if (element) {
+          element.focus();
+          element.value = value;
+          element.dispatchEvent(new Event('input', { bubbles: true }));
+          element.dispatchEvent(new Event('change', { bubbles: true }));
           results[key] = { filled: true };
         } else {
           results[key] = { filled: false };
@@ -557,60 +480,58 @@
       return results;
     },
 
-    // Scroll to element.
     scrollTo(nonce, selector) {
       requireNonce(nonce);
-      const el = deepQuery(selector);
-      if (!el) return { found: false };
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const element = document.querySelector(selector);
+      if (!element) return { found: false };
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return { found: true };
     },
   };
 
-  // Nonce accessible via Symbol (invisible to normal enumeration —
-  // Object.keys/for..in won't reveal it, only Symbol.for() lookup).
-  const _sinNonceKey = Symbol.for('__SIN_BRIDGE_NONCE__');
-  Object.defineProperty(window.__SIN_BRIDGE__, _sinNonceKey, {
+  const nonceKey = Symbol.for('__SIN_BRIDGE_NONCE__');
+  Object.defineProperty(window.__SIN_BRIDGE__, nonceKey, {
     value: _sinNonce,
     writable: false,
     enumerable: false,
     configurable: false,
   });
 
-  /**
-   * Public compatibility helpers kept on window because older integration code
-   * may still call these directly instead of going through __SIN_BRIDGE__.
-   */
-  window._sinDeepQuery = function(selector, root) {
-    return deepQuery(selector, root);
+  const captureTestKey = Symbol.for('__SIN_BRIDGE_CAPTURE_TEST__');
+  Object.defineProperty(window.__SIN_BRIDGE__, captureTestKey, {
+    value: {
+      handleClick,
+      handleInput,
+      handleSubmit,
+      recordNavigationMarker,
+      flushPendingInputs,
+      emitBehaviorEvent,
+    },
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
+
+  window._sinDeepQuery = function(selector, context) {
+    return normalizeContext(context).querySelector(selector);
   };
 
-  window._sinDeepQueryAll = function(selector, root) {
-    return deepQueryAll(selector, root);
+  window._sinDeepQueryAll = function(selector, context) {
+    return Array.from(normalizeContext(context).querySelectorAll(selector));
   };
 
-  /**
-   * Human entropy clicking helper retained as a compatibility surface.
-   */
   window._sinHumanClick = async function(element) {
     if (!element) return { error: 'Element not found' };
-
     element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    await new Promise((resolve) => setTimeout(resolve, 300 + Math.random() * 200));
-
-    const rect = element.getBoundingClientRect();
-    const x = rect.left + (rect.width / 2) + (Math.random() * 10 - 5);
-    const y = rect.top + (rect.height / 2) + (Math.random() * 10 - 5);
-
-    element.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y, isTrusted: true }));
-    await new Promise((resolve) => setTimeout(resolve, 20 + Math.random() * 50));
-
-    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
-    await new Promise((resolve) => setTimeout(resolve, 60 + Math.random() * 80));
-
-    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
-    element.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
-
-    return { success: true, entropy_applied: true, x, y };
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    element.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 5, clientY: 5, isTrusted: true }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 5, clientY: 5 }));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 5, clientY: 5 }));
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 5, clientY: 5 }));
+    return { success: true, entropy_applied: true };
   };
+
+  installBehaviorCaptureHooks();
 })();

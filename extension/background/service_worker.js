@@ -1,82 +1,4 @@
-/**
- * ==============================================================================
- * OpenSIN Component: service_worker.js
- * ==============================================================================
- * 
- * DESCRIPTION / BESCHREIBUNG:
- * Background service worker for the OpenSIN Bridge extension.
- * 
- * WHY IT EXISTS / WARUM ES EXISTIERT:
- * Acts as the bridge between MCP and local Chrome APIs.
- * 
- * RULES / REGELN:
- * 1. EXTENSIVE LOGGING: Every function call must be traceable.
- * 2. NO ASSUMPTIONS: Validate all inputs and external states.
- * 3. SECURITY FIRST: Never leak credentials or session data.
- * 
- * CONSEQUENCES / KONSEQUENZEN:
- * Breaking this script disables ALL browser-based agent actions.
- * 
- * AUTHOR: SIN-Zeus / A2A Fleet
- * ==============================================================================
- */
-
-
-/**
- * ==============================================================================
- * OpenSIN Bridge - Core Component (V4.0.0+)
- * ==============================================================================
- * 
- * DESCRIPTION / BESCHREIBUNG:
- * This file is a critical component of the OpenSIN Bridge ecosystem. 
- * It enables direct, secure, and reliable communication between the Hugging Face 
- * MCP Server and the user's local Chrome browser.
- * 
- * ARCHITECTURE / WARUM SO GEBAUT:
- * - We DO NOT use Selenium, Puppeteer, or nodriver here.
- * - We DO NOT launch new Chrome instances with --no-sandbox.
- * - Instead, we use the Native Chrome Extension API (MV3) inside the user's 
- *   DEFAULT profile to ensure all cookies, sessions, and extensions remain intact.
- * 
- * RULES / REGELN FÜR DIESEN CODE:
- * 1. NO ASSUMPTIONS: Do not assume a tab or window exists. Always verify and handle missing states.
- * 2. EXTENSIVE LOGGING: Every action must be logged. Silent failures are prohibited.
- * 3. FALLBACKS: If an API fails (e.g. tabs.create without a window), fallback gracefully (e.g. create a window).
- * 
- * CONSEQUENCES / KONSEQUENZEN WENN GEÄNDERT:
- * - If you break the WebSocket connection here, the entire autonomous agent fleet goes blind.
- * - If you change security policies (CSP), the extension might get banned by Chrome.
- * 
- * AUTHOR: SIN-Zeus / A2A Team
- * ==============================================================================
- */
-
-import {
-  OBSERVATION_DEFAULTS,
-  buildDomDiff,
-  buildVisualDiff,
-  evaluateObservation,
-  summarizeProof,
-} from './observation-runtime.mjs';
-
-import {
-  NATIVE_HOST_CONTEXT,
-  NATIVE_HOST_IDLE_TIMEOUT_MS,
-  NATIVE_HOST_NAME,
-  NATIVE_HOST_REQUEST_TIMEOUT_MS,
-  assertNativeCommandAllowed,
-  buildWorkflowStartPayload,
-  createNativeEnvelope,
-} from './native-host.mjs';
-
-// Shared deterministic primitive helpers are loaded as a side-effect module so
-// the exact same bounded rule set can be reused by the service worker, content
-// scripts, and Node-based tests without introducing bundling into this repo.
-import '../shared/deterministic-primitives.js';
-
-// The helper stays nullable on purpose. If it is ever unavailable we must keep
-// the existing adaptive paths working instead of failing closed.
-const deterministicPrimitives = globalThis.__OpenSINDeterministicPrimitives || null;
+import { createBehaviorTimelineStore } from './behavior_timeline_store.mjs';
 
 let offscreenReady = false;
 const VERSION = chrome.runtime.getManifest().version;
@@ -3560,6 +3482,250 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       hfWs.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
     }
   }
+});
+
+
+// ============================================================
+// ISSUES #17, #21, #24: Core Behavior Timeline Capture Layer
+// ============================================================
+// WHY: The bridge already knows how to observe pages, record video, and track
+// network requests. This layer turns those isolated surfaces into one durable,
+// session-scoped timeline that future automation and replay features can mine.
+//
+// PRIVACY / PERFORMANCE RULES:
+// - Recording is opt-in and disabled by default.
+// - Sensitive input values are redacted before they reach persistent storage.
+// - Content-side throttling/debouncing reduces noisy bursts.
+// - Background-side bounded flushes keep IndexedDB durable without turning each
+//   click into its own transaction.
+// ============================================================
+const ALLOWED_BEHAVIOR_MESSAGE_TYPES = new Set(['BEHAVIOR_EVENT']);
+const ALLOWED_BEHAVIOR_EVENT_TYPES = new Set([
+  'CLICK',
+  'INPUT',
+  'FORM_SUBMIT',
+  'NAVIGATION',
+  'OBSERVATION_MARKER',
+  'RECORDING_MARKER',
+]);
+const SENSITIVE_INPUT_TYPES = new Set(['password', 'credit-card', 'card-number', 'cvv', 'ssn', 'pin']);
+const SENSITIVE_FIELD_PATTERNS = /password|passwort|secret|token|credit.?card|card.?number|cvv|ssn|social.?security|pin\b/i;
+
+let behaviorRecordingEnabled = false;
+let behaviorRecordingScope = null;
+
+const behaviorTimelineStore = createBehaviorTimelineStore({
+  logger: (level, message, data) => log(level, message, data),
+});
+
+function sanitizeBehaviorDomain(domain) {
+  if (typeof domain !== 'string' || !domain) return null;
+  try {
+    return new URL(domain.includes('://') ? domain : `https://${domain}`).hostname;
+  } catch (_error) {
+    return domain;
+  }
+}
+
+function redactSensitiveValue(fieldName = '', inputType = '', value = '') {
+  const normalizedName = String(fieldName || '');
+  const normalizedType = String(inputType || '').toLowerCase();
+  if (normalizedType === 'password') return '[REDACTED:password]';
+  if (SENSITIVE_INPUT_TYPES.has(normalizedType)) return '[REDACTED:sensitive]';
+  if (SENSITIVE_FIELD_PATTERNS.test(normalizedName)) return '[REDACTED:field-name]';
+  return String(value || '');
+}
+
+function validateBehaviorRuntimeMessage(message) {
+  if (!message || typeof message !== 'object') return null;
+  if (!ALLOWED_BEHAVIOR_MESSAGE_TYPES.has(message._sinBridgeType)) return null;
+  if (!message.payload || typeof message.payload !== 'object') return null;
+  if (!ALLOWED_BEHAVIOR_EVENT_TYPES.has(message.payload.type)) return null;
+  return message.payload;
+}
+
+function isBehaviorRecordingInScope(sender, payload) {
+  if (!behaviorRecordingEnabled || !behaviorRecordingScope) return false;
+
+  if (behaviorRecordingScope.tabId != null && sender?.tab?.id !== behaviorRecordingScope.tabId) {
+    return false;
+  }
+
+  if (behaviorRecordingScope.domain) {
+    const senderUrl = payload?.url || sender?.url || sender?.tab?.url || '';
+    try {
+      if (new URL(senderUrl).hostname !== behaviorRecordingScope.domain) return false;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+async function recordBehaviorEvents(events, reason = 'runtime') {
+  if (!behaviorRecordingEnabled || !behaviorRecordingScope || !Array.isArray(events) || events.length === 0) {
+    return { accepted: 0, buffered: behaviorTimelineStore.getStatus().bufferedEvents };
+  }
+
+  return behaviorTimelineStore.appendEvents(events, {
+    scope: {
+      ...behaviorRecordingScope,
+      sessionId: behaviorRecordingScope.sessionId,
+      source: reason,
+    },
+  });
+}
+
+async function recordBehaviorMarker(type, marker, details = {}) {
+  if (!behaviorRecordingEnabled || !behaviorRecordingScope) return;
+  await recordBehaviorEvents([
+    {
+      type,
+      marker,
+      ...details,
+      timestamp: Date.now(),
+    },
+  ], 'marker');
+}
+
+reg('behavior_recording_enable', async (p = {}) => {
+  const tabId = Number.isInteger(p.tabId) ? p.tabId : null;
+  const domain = sanitizeBehaviorDomain(p.domain || null);
+  const startedAt = Date.now();
+  const session = await behaviorTimelineStore.ensureSession({ domain, tabId, startedAt, source: 'behavior_recording_enable' });
+
+  behaviorRecordingEnabled = true;
+  behaviorRecordingScope = {
+    domain,
+    tabId,
+    startedAt,
+    sessionId: session.sessionId,
+  };
+
+  await recordBehaviorMarker('NAVIGATION', 'recording-enabled', {
+    url: p.url || null,
+    source: 'behavior_recording_enable',
+  });
+
+  return {
+    enabled: true,
+    scope: behaviorRecordingScope,
+    store: behaviorTimelineStore.getStatus(),
+  };
+});
+
+reg('behavior_recording_disable', async () => {
+  const scope = behaviorRecordingScope;
+  behaviorRecordingEnabled = false;
+  behaviorRecordingScope = null;
+  const flushResult = await behaviorTimelineStore.flushNow('behavior_recording_disable');
+  return { enabled: false, scope, flushResult };
+});
+
+reg('behavior_recording_status', async () => ({
+  enabled: behaviorRecordingEnabled,
+  scope: behaviorRecordingScope,
+  store: behaviorTimelineStore.getStatus(),
+}));
+
+reg('behavior_timeline_events', async (p = {}) => ({
+  sessionId: p.sessionId || behaviorRecordingScope?.sessionId || null,
+  events: await behaviorTimelineStore.listEvents(p.sessionId || behaviorRecordingScope?.sessionId || null, p.limit || 100),
+}));
+
+reg('behavior_timeline_sessions', async (p = {}) => ({
+  sessions: await behaviorTimelineStore.listSessions(p.limit || 20),
+}));
+
+reg('behavior_timeline_flush', async () => behaviorTimelineStore.flushNow('tool'));
+
+const originalStartRecording = TOOL_REGISTRY.start_recording;
+reg('start_recording', async (p = {}) => {
+  const result = await originalStartRecording(p);
+  if (result?.success) {
+    await recordBehaviorMarker('RECORDING_MARKER', 'video-recording-started', {
+      tabId: result.tabId,
+      mimeType: result.mimeType,
+      source: 'start_recording',
+    });
+  }
+  return result;
+});
+
+const originalSnapshot = TOOL_REGISTRY.snapshot;
+reg('snapshot', async (p = {}) => {
+  const result = await originalSnapshot(p);
+  if (!result?.error) {
+    await recordBehaviorMarker('OBSERVATION_MARKER', 'snapshot', {
+      tabId: p?.tabId || null,
+      refCount: result.refCount,
+      totalNodes: result.totalNodes,
+      source: 'snapshot',
+    });
+  }
+  return result;
+});
+
+const originalObserve = TOOL_REGISTRY.observe;
+reg('observe', async (p = {}) => {
+  const result = await originalObserve(p);
+  if (!result?.error) {
+    await recordBehaviorMarker('OBSERVATION_MARKER', 'observe', {
+      tabId: p?.tabId || null,
+      refCount: result.snapshot?.refCount || null,
+      totalNodes: result.snapshot?.totalNodes || null,
+      source: 'observe',
+    });
+  }
+  return result;
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const payload = validateBehaviorRuntimeMessage(message);
+  if (!payload) return false;
+  if (!isBehaviorRecordingInScope(sender, payload)) return false;
+
+  const sanitizedPayload = {
+    ...payload,
+    tabId: sender?.tab?.id ?? payload.tabId ?? null,
+    frameId: sender?.frameId ?? payload.frameId ?? 0,
+    url: payload.url || sender?.url || sender?.tab?.url || null,
+  };
+
+  if (sanitizedPayload.type === 'INPUT') {
+    sanitizedPayload.value = redactSensitiveValue(
+      sanitizedPayload.name,
+      sanitizedPayload.inputType,
+      sanitizedPayload.value,
+    );
+  }
+
+  recordBehaviorEvents([sanitizedPayload], 'content-script')
+    .then((result) => sendResponse({ success: true, buffered: result.buffered, sessionId: result.sessionId || behaviorRecordingScope?.sessionId || null }))
+    .catch((error) => {
+      log('error', `Behavior timeline message failed: ${error.message}`);
+      sendResponse({ success: false, error: error.message });
+    });
+
+  return true;
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && behaviorRecordingEnabled) {
+    recordBehaviorMarker('NAVIGATION', 'tab-complete', {
+      tabId,
+      url: tab?.url || changeInfo.url || null,
+      title: tab?.title || null,
+      source: 'tabs.onUpdated',
+    }).catch((error) => log('error', `Navigation marker failed: ${error.message}`));
+  }
+});
+
+chrome.runtime.onSuspend?.addListener(() => {
+  behaviorTimelineStore.shutdown().catch((error) => {
+    log('error', `Behavior timeline shutdown flush failed: ${error.message}`);
+  });
 });
 
 // --- Init ---

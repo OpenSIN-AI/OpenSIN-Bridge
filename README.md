@@ -182,10 +182,19 @@ The server-side code is trade secret material and must NEVER be published public
 
 *OpenSIN-AI - Autonomous AI Agent Ecosystem*
 
----
 
-## 🚨 MISSION CRITICAL MANDATE: NO AUTORUN. NO BLIND CLICKS.
+## Behavior Timeline Capture
 
-Please see the absolute, top-priority rulebook in [`AGENTS.md`](./AGENTS.md). 
-**ANY automation, script, or agent utilizing this bridge MUST implement the 10-step Vision Gate Loop.**
-Escalating click chains without interim vision checks are strictly **banned**. EVERY SINGLE STAGE must be visually verified.
+OpenSIN-Bridge now includes a core behavior-timeline capture layer for issue set #17 / #21 / #24.
+
+- **Durable storage:** session events are written into an IndexedDB-backed event store in the MV3 service worker.
+- **Content-side capture:** the MAIN-world injector emits compact events for clicks, debounced inputs, form submits, and navigation markers.
+- **Performance controls:** click throttling, input debouncing, short-window navigation dedupe, buffered flushes, and bounded IndexedDB batch sizes keep capture lightweight.
+- **Bridge markers:** `start_recording`, `snapshot`, and `observe` now append marker events into the same session timeline when behavior recording is enabled.
+
+### Verification
+
+```bash
+npm test
+npm run build
+```
