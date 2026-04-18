@@ -1,4 +1,7 @@
-# OpenSIN-Bridge\n\n> **OpenSIN ist keine Software. Es ist eine digitale Belegschaft.**\n> Die Bridge ist die sichere Tuer, durch die Nutzer auf die Intelligenz unserer Agenten zugreifen. Der Agent arbeitet (z.B. auf Prolific), die Intelligenz bleibt im Server.\n
+# OpenSIN-Bridge
+
+> **OpenSIN ist keine Software. Es ist eine digitale Belegschaft.**
+> Die Bridge ist die sichere Tuer, durch die Nutzer auf die Intelligenz unserer Agenten zugreifen. Der Agent arbeitet (z.B. auf Prolific), die Intelligenz bleibt im Server.
 
 > **Paid SaaS Chrome Extension (5 EUR/month) — Thin-Client Architecture**
 >
@@ -123,7 +126,26 @@ npm run deploy:server
 
 # Package extension for Chrome Web Store
 npm run ext:package
+
+# Create an isolated issue worktree
+npm run issue:worktree -- --issue 26 --branch feat/worktree-pr-isolation-ops
+
+# Verify that a PR only contains issue-scoped files
+npm run verify:issue-scope -- --issue 26 --branch feat/worktree-pr-isolation-ops --base origin/main --allow README.md --allow docs/ --allow scripts/ --allow package.json
+
+# Run the workflow regression tests for worktree and PR isolation
+npm run test:issue-worktree
 ```
+
+## Issue-Scoped Cloud Execution
+
+Cloud executors must not implement features from a dirty default checkout. OpenSIN-Bridge now standardizes issue work in dedicated worktrees under `/Users/jeremy/dev/clean-worktrees/` with an explicit PR isolation gate.
+
+- Workflow: [`docs/ISSUE_SCOPED_EXECUTION.md`](docs/ISSUE_SCOPED_EXECUTION.md)
+- Review checklist: [`docs/PR_ISOLATION_CHECKLIST.md`](docs/PR_ISOLATION_CHECKLIST.md)
+- Worktree helper: `npm run issue:worktree -- --issue <n> --branch <branch>`
+- Scope gate: `npm run verify:issue-scope -- ...`
+- Regression tests: `npm run test:issue-worktree`
 
 ## License
 
