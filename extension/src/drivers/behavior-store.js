@@ -1,12 +1,25 @@
 /**
  * Behavior timeline store: durable session + event stream backed by IndexedDB.
  *
- * Contract:
- * - capture and persist is opt-in; if nothing calls enableRecording(), the
- *   store idles and never writes
- * - writes are buffered so bursts don't thrash IndexedDB
- * - bounded retention so a runaway page cannot OOM the service worker
- * - privacy redaction happens in the caller; this module is privacy-blind
+ * Design:
+ *   - capture and persist is opt-in; if nothing calls start(), the store idles
+ *     and never writes
+ *   - writes are buffered so bursts don't thrash IndexedDB
+ *   - bounded retention so a runaway page cannot OOM the service worker
+ *   - privacy redaction happens in the caller; this module is privacy-blind
+ *
+ * Exposed API (tools/behavior.js uses this surface):
+ *   start({ scope, tabId, domain? })
+ *   stop()
+ *   status()
+ *   appendEvents(events, opts)
+ *   listSessions(limit?)
+ *   listEvents(sessionId, limit?)
+ *   getSession(sessionId)
+ *   deleteSession(sessionId)
+ *   clear()
+ *   flushNow()
+ *   shutdown()
  */
 
 import { BEHAVIOR } from '../core/config.js';
@@ -20,6 +33,7 @@ let buffered = [];
 let flushTimer = null;
 let flushInFlight = false;
 let sequence = 0;
+let recording = false;
 
 function openDatabase() {
   if (dbPromise) return dbPromise;
@@ -66,14 +80,12 @@ async function persistEvents(session, events) {
     const tx = db.transaction([BEHAVIOR.sessionsStore, BEHAVIOR.eventsStore], 'readwrite');
     const eventStore = tx.objectStore(BEHAVIOR.eventsStore);
     for (const event of events) eventStore.put(event);
-
     tx.objectStore(BEHAVIOR.sessionsStore).put({
       ...session,
       eventCount: (session.eventCount || 0) + events.length,
       lastEventAt: events[events.length - 1].timestamp,
       updatedAt: Date.now(),
     });
-
     tx.oncomplete = () => resolve({ written: events.length });
     tx.onerror = () => reject(tx.error);
   });
@@ -87,15 +99,27 @@ function scheduleFlush(delayMs = BEHAVIOR.flushIntervalMs) {
   }, Math.max(0, delayMs));
 }
 
-export async function ensureSession({ domain = null, tabId = null, startedAt = Date.now(), source = 'runtime' } = {}) {
-  const scope = { domain: domain || null, tabId: Number.isInteger(tabId) ? tabId : null, startedAt, source };
-  const sessionId = buildSessionId(scope);
+export async function ensureSession({
+  domain = null,
+  tabId = null,
+  startedAt = Date.now(),
+  source = 'runtime',
+  scope = null,
+} = {}) {
+  const info = {
+    domain: domain || null,
+    tabId: Number.isInteger(tabId) ? tabId : null,
+    startedAt,
+    source,
+    scope,
+  };
+  const sessionId = buildSessionId(info);
 
   if (activeSession?.sessionId === sessionId) return activeSession;
 
   const record = {
     sessionId,
-    scope,
+    scope: info,
     startedAt,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -107,8 +131,48 @@ export async function ensureSession({ domain = null, tabId = null, startedAt = D
   return activeSession;
 }
 
+/**
+ * Begin a recording session. Idempotent for matching scopes.
+ */
+export async function start({ scope = 'tab', tabId = null, domain = null } = {}) {
+  recording = true;
+  await ensureSession({ domain, tabId: scope === 'tab' ? tabId : null, scope });
+  return activeSession;
+}
+
+/**
+ * Stop recording. Flushes any buffered events.
+ */
+export async function stop() {
+  recording = false;
+  const result = await flushNow('stop');
+  activeSession = null;
+  return result;
+}
+
+/**
+ * Return a lightweight status record for the popup / behavior.status tool.
+ */
+export function status() {
+  return {
+    recording,
+    sessionId: activeSession?.sessionId || null,
+    scope: activeSession?.scope || null,
+    buffered: buffered.length,
+    flushInFlight,
+    flushScheduled: flushTimer !== null,
+  };
+}
+
+/**
+ * Legacy alias used earlier.
+ */
+export const getStatus = status;
+
 export async function appendEvents(events, { scope, reason = 'runtime' } = {}) {
-  if (!Array.isArray(events) || events.length === 0) return { accepted: 0, buffered: buffered.length };
+  if (!Array.isArray(events) || events.length === 0) {
+    return { accepted: 0, buffered: buffered.length };
+  }
   const session = await ensureSession(scope || activeSession?.scope || {});
 
   const normalized = events.map((event) => {
@@ -131,11 +195,8 @@ export async function appendEvents(events, { scope, reason = 'runtime' } = {}) {
     buffered.splice(0, buffered.length - BEHAVIOR.maxRetainedBuffer);
   }
 
-  if (buffered.length >= BEHAVIOR.maxBufferedEvents) {
-    scheduleFlush(0);
-  } else {
-    scheduleFlush();
-  }
+  if (buffered.length >= BEHAVIOR.maxBufferedEvents) scheduleFlush(0);
+  else scheduleFlush();
 
   return { accepted: normalized.length, buffered: buffered.length, sessionId: session.sessionId };
 }
@@ -150,7 +211,6 @@ export async function flushNow(reason = 'manual') {
   }
   flushInFlight = true;
   const batch = buffered.splice(0, BEHAVIOR.maxFlushBatchSize);
-
   try {
     const result = await persistEvents(activeSession, batch);
     if (buffered.length > 0) scheduleFlush(0);
@@ -195,13 +255,61 @@ export async function listEvents(sessionId, limit = 200) {
   });
 }
 
-export function getStatus() {
-  return {
-    sessionId: activeSession?.sessionId || null,
-    buffered: buffered.length,
-    flushInFlight,
-    flushScheduled: flushTimer !== null,
-  };
+/**
+ * Fetch a single session along with its events.
+ */
+export async function getSession(sessionId) {
+  if (!sessionId) return null;
+  const db = await openDatabase();
+  const session = await new Promise((resolve, reject) => {
+    const tx = db.transaction(BEHAVIOR.sessionsStore, 'readonly');
+    const request = tx.objectStore(BEHAVIOR.sessionsStore).get(sessionId);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+  if (!session) return null;
+  const events = await listEvents(sessionId, 10_000);
+  return { ...session, events };
+}
+
+export async function deleteSession(sessionId) {
+  if (!sessionId) return { ok: false };
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([BEHAVIOR.sessionsStore, BEHAVIOR.eventsStore], 'readwrite');
+    tx.objectStore(BEHAVIOR.sessionsStore).delete(sessionId);
+    const events = tx.objectStore(BEHAVIOR.eventsStore);
+    const index = events.index('sessionId');
+    const req = index.openCursor(IDBKeyRange.only(sessionId));
+    req.onsuccess = (event) => {
+      const cursor = event.target.result;
+      if (cursor) {
+        cursor.delete();
+        cursor.continue();
+      }
+    };
+    tx.oncomplete = () => resolve({ ok: true });
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Clear all sessions and events. Used for factory reset + privacy tooling.
+ */
+export async function clear() {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([BEHAVIOR.sessionsStore, BEHAVIOR.eventsStore], 'readwrite');
+    tx.objectStore(BEHAVIOR.sessionsStore).clear();
+    tx.objectStore(BEHAVIOR.eventsStore).clear();
+    tx.oncomplete = () => {
+      activeSession = null;
+      buffered = [];
+      sequence = 0;
+      resolve({ ok: true });
+    };
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
 export async function shutdown() {
@@ -216,6 +324,7 @@ export function resetForTests() {
   activeSession = null;
   buffered = [];
   sequence = 0;
+  recording = false;
   if (flushTimer !== null) {
     clearTimeout(flushTimer);
     flushTimer = null;

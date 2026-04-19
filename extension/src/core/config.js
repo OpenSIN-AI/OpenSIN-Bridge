@@ -1,9 +1,15 @@
 /**
- * OpenSIN Bridge v5 - Central configuration
+ * OpenSIN Bridge - Central configuration.
  *
- * All tunable constants live here so the rest of the codebase stays declarative.
- * Runtime overrides may arrive through chrome.storage.local under the
- * `openSin.config` key; see core/state.js for the merge strategy.
+ * Exports:
+ *   BRIDGE, NATIVE_HOST, TRANSPORT, RATE_LIMIT, NETWORK_CAPTURE, SNAPSHOT,
+ *   HUMAN, VISION, BEHAVIOR, SECURITY, STORAGE_KEYS
+ *
+ * and a flattened CONFIG view used by the service worker and transports:
+ *   CONFIG.version, CONFIG.wsUrl, CONFIG.nativeHost, CONFIG.ws.*, CONFIG.autostart.*
+ *
+ * Runtime overrides can arrive through chrome.storage.local under the
+ * `openSin.config` key; call `initConfig()` at boot to merge them in.
  */
 
 export const BRIDGE = Object.freeze({
@@ -63,54 +69,18 @@ export const SNAPSHOT = Object.freeze({
   settleDelayMs: 650,
   minVisualChangeRatio: 0.004,
   interactiveRoles: new Set([
-    'button',
-    'link',
-    'textbox',
-    'checkbox',
-    'radio',
-    'combobox',
-    'menuitem',
-    'tab',
-    'switch',
-    'slider',
-    'spinbutton',
-    'searchbox',
-    'option',
-    'menuitemcheckbox',
-    'menuitemradio',
-    'treeitem',
-    'listbox',
+    'button', 'link', 'textbox', 'checkbox', 'radio', 'combobox', 'menuitem',
+    'tab', 'switch', 'slider', 'spinbutton', 'searchbox', 'option',
+    'menuitemcheckbox', 'menuitemradio', 'treeitem', 'listbox',
   ]),
   structuralRoles: new Set([
-    'heading',
-    'img',
-    'table',
-    'row',
-    'cell',
-    'list',
-    'listitem',
-    'navigation',
-    'main',
-    'complementary',
-    'banner',
-    'contentinfo',
-    'form',
-    'region',
-    'alert',
-    'dialog',
-    'status',
-    'separator',
+    'heading', 'img', 'table', 'row', 'cell', 'list', 'listitem', 'navigation',
+    'main', 'complementary', 'banner', 'contentinfo', 'form', 'region', 'alert',
+    'dialog', 'status', 'separator',
   ]),
   skipRoles: new Set([
-    'none',
-    'presentation',
-    'generic',
-    'InlineTextBox',
-    'LineBreak',
-    'StaticText',
-    'paragraph',
-    'group',
-    'Section',
+    'none', 'presentation', 'generic', 'InlineTextBox', 'LineBreak',
+    'StaticText', 'paragraph', 'group', 'Section',
   ]),
 });
 
@@ -133,7 +103,8 @@ export const VISION = Object.freeze({
     { provider: 'gemini', model: 'gemini-2.5-pro', rpd: 25 },
   ]),
   endpoints: Object.freeze({
-    gemini: 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}',
+    gemini:
+      'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}',
     groq: 'https://api.groq.com/openai/v1/chat/completions',
   }),
 });
@@ -165,6 +136,29 @@ export const STORAGE_KEYS = Object.freeze({
 });
 
 /**
+ * Flattened view of config used by transports + service worker. Mutable so
+ * initConfig() can layer overrides on top at boot.
+ */
+export const CONFIG = {
+  version: BRIDGE.version,
+  name: BRIDGE.name,
+  wsUrl: TRANSPORT.websocket.defaultUrl,
+  nativeHost: NATIVE_HOST.name,
+  ws: {
+    backoffMinMs: TRANSPORT.websocket.reconnectBaseMs,
+    backoffMaxMs: TRANSPORT.websocket.reconnectMaxMs,
+    backoffJitter: TRANSPORT.websocket.reconnectJitter,
+    heartbeatMs: TRANSPORT.websocket.pingIntervalMs,
+    pongTimeoutMs: TRANSPORT.websocket.pongTimeoutMs,
+  },
+  autostart: {
+    ws: true,
+    native: false,
+  },
+  logLevel: 'info',
+};
+
+/**
  * Return true if the URL scheme is allowed for navigation / tab creation.
  * We reject anything that can smuggle script execution.
  */
@@ -172,4 +166,29 @@ export function isSafeUrl(url) {
   if (typeof url !== 'string' || !url.trim()) return false;
   const lower = url.trim().toLowerCase();
   return !SECURITY.blockedUrlSchemes.some((scheme) => lower.startsWith(scheme));
+}
+
+/**
+ * Load persisted config overrides and merge them onto the live CONFIG object.
+ * Safe to call repeatedly.
+ */
+export async function initConfig() {
+  try {
+    const stored = await chrome.storage.local.get(STORAGE_KEYS.config);
+    const overrides = stored?.[STORAGE_KEYS.config];
+    if (overrides && typeof overrides === 'object') {
+      if (typeof overrides.wsUrl === 'string') CONFIG.wsUrl = overrides.wsUrl;
+      if (typeof overrides.nativeHost === 'string') CONFIG.nativeHost = overrides.nativeHost;
+      if (typeof overrides.logLevel === 'string') CONFIG.logLevel = overrides.logLevel;
+      if (overrides.autostart && typeof overrides.autostart === 'object') {
+        Object.assign(CONFIG.autostart, overrides.autostart);
+      }
+      if (overrides.ws && typeof overrides.ws === 'object') {
+        Object.assign(CONFIG.ws, overrides.ws);
+      }
+    }
+  } catch (_err) {
+    // Storage can fail early in the lifecycle — non-fatal.
+  }
+  return CONFIG;
 }

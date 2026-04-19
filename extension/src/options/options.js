@@ -1,85 +1,95 @@
 /**
- * options/options.js — persists settings into chrome.storage.local. The
- * service worker re-reads config on next boot; transports also re-read when
- * restarted from the popup.
+ * options/options.js — persists settings into chrome.storage.local under the
+ * canonical `openSin.config` key that initConfig() reads at boot.
+ *
+ * Transports re-read when restarted from the popup; the service worker
+ * re-reads on next suspend/resume cycle.
  */
 
-const KEYS = [
-  "wsUrl",
-  "nativeHost",
-  "autostartWs",
-  "autostartNative",
-  "heartbeatMs",
-  "backoffMaxMs",
-  "externallyAllowed",
-  "visionProvider",
-  "visionKey",
-]
+const CONFIG_KEY = 'openSin.config';
+const VISION_KEYS_KEY = 'openSin.visionKeys';
 
 const DEFAULTS = {
-  wsUrl: "ws://127.0.0.1:8765/bridge",
-  nativeHost: "com.opensin.bridge",
-  autostartWs: "true",
-  autostartNative: "false",
-  heartbeatMs: 25000,
+  wsUrl: 'wss://openjerro-opensin-bridge-mcp.hf.space/extension',
+  nativeHost: 'ai.opensin.bridge.host',
+  autostartWs: true,
+  autostartNative: false,
+  heartbeatMs: 20000,
   backoffMaxMs: 30000,
-  externallyAllowed: "",
-  visionProvider: "gateway",
-  visionKey: "",
-}
+  externallyAllowed: [],
+  visionProvider: 'gateway',
+  visionKey: '',
+};
 
-const $ = (sel) => document.querySelector(sel)
+const $ = (sel) => document.querySelector(sel);
 
 function parseList(text) {
-  return (text || "")
+  return String(text || '')
     .split(/\r?\n|,/)
     .map((s) => s.trim())
-    .filter(Boolean)
+    .filter(Boolean);
 }
 
 async function load() {
-  const stored = await chrome.storage.local.get(KEYS.map((k) => `opensin:${k}`))
-  for (const k of KEYS) {
-    const v = stored[`opensin:${k}`]
-    const el = $(`#${k}`)
-    if (!el) continue
-    if (k === "externallyAllowed") {
-      el.value = Array.isArray(v) ? v.join("\n") : v ?? ""
-    } else {
-      el.value = v ?? DEFAULTS[k]
-    }
-  }
+  const stored = await chrome.storage.local.get([CONFIG_KEY, VISION_KEYS_KEY]);
+  const cfg = stored[CONFIG_KEY] || {};
+  const vk = stored[VISION_KEYS_KEY] || {};
+
+  $('#wsUrl').value = cfg.wsUrl ?? DEFAULTS.wsUrl;
+  $('#nativeHost').value = cfg.nativeHost ?? DEFAULTS.nativeHost;
+  $('#autostartWs').value = String(cfg.autostart?.ws ?? DEFAULTS.autostartWs);
+  $('#autostartNative').value = String(cfg.autostart?.native ?? DEFAULTS.autostartNative);
+  $('#heartbeatMs').value = cfg.ws?.heartbeatMs ?? DEFAULTS.heartbeatMs;
+  $('#backoffMaxMs').value = cfg.ws?.backoffMaxMs ?? DEFAULTS.backoffMaxMs;
+  $('#externallyAllowed').value = (cfg.externallyAllowed || DEFAULTS.externallyAllowed).join('\n');
+  $('#visionProvider').value = vk.provider || DEFAULTS.visionProvider;
+  $('#visionKey').value = vk.key || DEFAULTS.visionKey;
 }
 
-async function save(e) {
-  e.preventDefault()
-  const data = {}
-  for (const k of KEYS) {
-    const el = $(`#${k}`)
-    if (!el) continue
-    let v = el.value
-    if (k === "autostartWs" || k === "autostartNative") v = v === "true"
-    else if (k === "heartbeatMs" || k === "backoffMaxMs") v = Number(v)
-    else if (k === "externallyAllowed") v = parseList(v)
-    data[`opensin:${k}`] = v
-  }
-  await chrome.storage.local.set(data)
-  const saved = $("#saved")
-  saved.textContent = "saved"
-  setTimeout(() => (saved.textContent = ""), 1500)
+async function save(event) {
+  event.preventDefault();
+  const cfg = {
+    wsUrl: $('#wsUrl').value.trim() || DEFAULTS.wsUrl,
+    nativeHost: $('#nativeHost').value.trim() || DEFAULTS.nativeHost,
+    autostart: {
+      ws: $('#autostartWs').value === 'true',
+      native: $('#autostartNative').value === 'true',
+    },
+    ws: {
+      heartbeatMs: Number($('#heartbeatMs').value) || DEFAULTS.heartbeatMs,
+      backoffMaxMs: Number($('#backoffMaxMs').value) || DEFAULTS.backoffMaxMs,
+    },
+    externallyAllowed: parseList($('#externallyAllowed').value),
+  };
+  const vision = {
+    provider: $('#visionProvider').value,
+    key: $('#visionKey').value.trim(),
+  };
+
+  await chrome.storage.local.set({
+    [CONFIG_KEY]: cfg,
+    [VISION_KEYS_KEY]: vision,
+  });
+
+  const saved = $('#saved');
+  saved.textContent = 'saved — restart the bridge from the popup for all changes to take effect';
+  setTimeout(() => (saved.textContent = ''), 4000);
 }
 
-async function reset() {
-  for (const k of KEYS) {
-    const el = $(`#${k}`)
-    if (!el) continue
-    if (k === "externallyAllowed") el.value = ""
-    else el.value = DEFAULTS[k]
-  }
+function reset() {
+  $('#wsUrl').value = DEFAULTS.wsUrl;
+  $('#nativeHost').value = DEFAULTS.nativeHost;
+  $('#autostartWs').value = String(DEFAULTS.autostartWs);
+  $('#autostartNative').value = String(DEFAULTS.autostartNative);
+  $('#heartbeatMs').value = DEFAULTS.heartbeatMs;
+  $('#backoffMaxMs').value = DEFAULTS.backoffMaxMs;
+  $('#externallyAllowed').value = DEFAULTS.externallyAllowed.join('\n');
+  $('#visionProvider').value = DEFAULTS.visionProvider;
+  $('#visionKey').value = DEFAULTS.visionKey;
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  load()
-  $("#form").addEventListener("submit", save)
-  $("#reset").addEventListener("click", reset)
-})
+document.addEventListener('DOMContentLoaded', () => {
+  load();
+  $('#form').addEventListener('submit', save);
+  $('#reset').addEventListener('click', reset);
+});

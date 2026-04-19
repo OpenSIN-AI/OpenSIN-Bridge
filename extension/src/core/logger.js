@@ -1,11 +1,12 @@
 /**
  * Structured logger for the MV3 service worker.
  *
- * Goals:
+ * Features:
  * - every log has a timestamp, level, scope, and optional structured payload
  * - a bounded ring buffer is exposed via `getRecent()` so the popup/options UI
  *   can render operator-facing diagnostics without re-scraping console
- * - no PII leaks: payloads are shallow-cloned, values are capped, buffer-size bounded
+ * - no PII leaks: payloads are shallow-cloned, values are capped, buffer bounded
+ * - attachGlobalErrorHandlers() wires uncaught rejections into the log stream
  */
 
 const LEVELS = Object.freeze({ debug: 10, info: 20, warn: 30, error: 40 });
@@ -27,7 +28,12 @@ function safeClone(value, depth = 0) {
   if (typeof value === 'string') return clampString(value);
   if (typeof value === 'number' || typeof value === 'boolean') return value;
   if (value instanceof Error) {
-    return { name: value.name, message: clampString(value.message), stack: clampString(value.stack || '') };
+    return {
+      name: value.name,
+      code: value.code,
+      message: clampString(value.message),
+      stack: clampString(value.stack || ''),
+    };
   }
   if (depth > 2) return '[truncated]';
   if (Array.isArray(value)) return value.slice(0, 25).map((entry) => safeClone(entry, depth + 1));
@@ -71,17 +77,13 @@ export function log(level, scope, message, data) {
     ts: new Date().toISOString(),
   };
 
-  const serialized = entry.data === undefined
-    ? `[${entry.scope}] ${entry.message}`
-    : `[${entry.scope}] ${entry.message}`;
-
+  const prefix = `[${entry.scope}] ${entry.message}`;
   const fn = console[level] || console.log;
-  if (entry.data === undefined) fn(serialized);
-  else fn(serialized, entry.data);
+  if (entry.data === undefined) fn(prefix);
+  else fn(prefix, entry.data);
 
   publish(entry);
 
-  // Hard cap payload bytes to protect storage / UI consumers.
   if (entry.data !== undefined) {
     try {
       const encoded = JSON.stringify(entry.data);
@@ -95,10 +97,12 @@ export function log(level, scope, message, data) {
 }
 
 /**
- * Shorthand helpers. `scope` is the logical subsystem name.
+ * Create a scoped logger. Both `logger(scope)` and `createLogger(scope)` return
+ * the same shape — alias exists to satisfy different import styles.
  */
 export function logger(scope) {
   return {
+    scope,
     debug: (message, data) => log('debug', scope, message, data),
     info: (message, data) => log('info', scope, message, data),
     warn: (message, data) => log('warn', scope, message, data),
@@ -106,8 +110,14 @@ export function logger(scope) {
   };
 }
 
+export const createLogger = logger;
+
 export function setMinLevel(level) {
   if (LEVELS[level]) minLevel = LEVELS[level];
+}
+
+export function getMinLevel() {
+  return Object.entries(LEVELS).find(([, v]) => v === minLevel)?.[0] || 'info';
 }
 
 export function onLog(listener) {
@@ -116,10 +126,31 @@ export function onLog(listener) {
 }
 
 export function getRecent(count = 50) {
-  const slice = ring.slice(-count);
-  return slice.map((entry) => ({ ...entry }));
+  return ring.slice(-count).map((entry) => ({ ...entry }));
 }
 
 export function clearRecent() {
   ring.length = 0;
+}
+
+/**
+ * Wire unhandled-rejection + uncaught-exception hooks into the log stream so
+ * background crashes surface in the popup diagnostics instead of dying
+ * silently.
+ */
+export function attachGlobalErrorHandlers() {
+  const scope = 'unhandled';
+  if (typeof self !== 'undefined' && typeof self.addEventListener === 'function') {
+    self.addEventListener('error', (event) => {
+      log('error', scope, event?.message || 'error', {
+        filename: event?.filename,
+        lineno: event?.lineno,
+        colno: event?.colno,
+        error: event?.error,
+      });
+    });
+    self.addEventListener('unhandledrejection', (event) => {
+      log('error', scope, 'unhandledrejection', { reason: event?.reason });
+    });
+  }
 }
