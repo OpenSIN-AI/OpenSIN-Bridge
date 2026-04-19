@@ -19,6 +19,15 @@
  *   - New console errors/warnings captured since "before" by
  *     content/debug-console.js (MAIN-world, runs at document_start)
  *
+ * Runtime contract:
+ *   - `debug-console.js` must already be loaded in the MAIN world before
+ *     this tool can read any console entries.
+ *   - `stealth-main.js` must load first so `debug-console.js` can inherit
+ *     the native-toString marker and stay non-fingerprintable.
+ *   - The manifest must keep `proxy` and `declarativeNetRequest` granted
+ *     at install time; they are part of the v2 stealth/debug runtime, not
+ *     optional convenience permissions.
+ *
  * The trace record is stored in chrome.storage.session under key
  * `__opensin_debug_trace`, keyed by sessionId. The Worker retrieves it
  * with debug.getTrace({ sessionId }) when it wants to ship the trace

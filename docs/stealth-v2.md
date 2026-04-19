@@ -42,6 +42,24 @@ extension/src/content/stealth-main.js
 └── Diagnostic API (__opensin_ping__, __opensin_stealth_status__)
 ```
 
+## Manifest / runtime contract
+
+Stealth v2 is not a standalone content script anymore. The runtime now
+depends on the manifest granting `proxy` and `declarativeNetRequest` at
+install time. Those permissions are part of the critical path for the
+stealth + debug stack and must **not** be moved back into
+`optional_permissions` without updating the docs, tests, and rollout plan.
+
+`webRequest`, `contextMenus`, and `management` remain optional because they
+are operator convenience features, not boot prerequisites.
+
+The other hard requirement is load order: `stealth-main.js` must run before
+`debug-console.js` in the same MAIN world so the console tracer can inherit
+`markNative()` and stay toString-clean.
+
+If you touch any of the above, update `README.md`, `CHANGELOG.md`, and
+`docs/debug-tracing.md` in the same change set.
+
 ES module syntax is **not** used because Manifest V3 content scripts
 do not support `"type": "module"` yet. Every time the platform does
 support it, we can split the 17 modules into separate files; until

@@ -31,6 +31,19 @@ restarts.
 
 ## Tools
 
+## Runtime contract
+
+The debug-tracing stack assumes the v2 manifest contract is already in
+place: `proxy` and `declarativeNetRequest` are required, not optional.
+That is intentional — the debug tooling is coupled to the same bridge
+runtime that powers stealth v2, and future refactors must update the docs
+and tests together.
+
+The console hook also depends on load order: `stealth-main.js` must load
+first, then `debug-console.js` in the same MAIN world at `document_start`.
+That lets `debug-console.js` inherit `markNative()` and keeps the hooks
+from looking artificial to the page.
+
 ### `debug.startSession({ label })`
 
 Opens a named trace session and returns `{ sessionId }`. Typical use:

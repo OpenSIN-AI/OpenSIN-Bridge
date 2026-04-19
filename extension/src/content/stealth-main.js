@@ -29,6 +29,13 @@
  *      string, not just `true`), `window.__opensin_ping__` still
  *      works, and the message-bridge channel `__OPENSIN_BRIDGE__`
  *      still works.
+ *   6. Manifest/runtime contract: v2 assumes `proxy` and
+ *      `declarativeNetRequest` are granted at install time. They are
+ *      required by the stealth/debug stack and must not be demoted to
+ *      optional permissions without updating docs + tests.
+ *   7. Load-order coupling: `debug-console.js` runs in the same MAIN
+ *      world after this file so it can inherit `markNative()` and keep
+ *      its hooks native-looking.
  *
  * EVASIONS APPLIED
  * ----------------

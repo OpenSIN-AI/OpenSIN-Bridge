@@ -48,6 +48,9 @@ happened in the viewport.
   the JSON and asserts that the MAIN-world entry contains both
   `stealth-main.js` and `debug-console.js`, in that order, at
   `document_start`. Robust against formatting changes.
+- `docs/stealth-v2.md` and `docs/debug-tracing.md` now spell out the
+  manifest/runtime contract: `proxy` + `declarativeNetRequest` are
+  required, and `stealth-main.js` must load before `debug-console.js`.
 
 ### Storage
 
