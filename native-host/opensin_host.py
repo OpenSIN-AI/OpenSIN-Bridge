@@ -122,7 +122,24 @@ class OpenSINNativeHost:
         sys.stdout.buffer.flush()
 
     def handle_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
-        """Route one extension request to the appropriate host capability."""
+        """Route one extension request to the appropriate host capability.
+
+        Accepts two interchangeable envelopes:
+          - Legacy: {command, payload, requestId}
+          - JSON-RPC (aligned with transports/native.js): {id, method, params}
+        """
+        # Normalise JSON-RPC envelope onto the legacy command/payload shape.
+        if 'method' in message and 'command' not in message:
+            message = {
+                'command': message.get('method'),
+                'payload': message.get('params') or {},
+                'requestId': message.get('id'),
+                'type': message.get('type'),
+            }
+        # Extension bookkeeping frames we simply ack.
+        if message.get('type') in {'register', 'event', 'ping'}:
+            return self.success_response(message, {'ack': True})
+
         command = message.get('command')
         if command not in ALLOWED_COMMANDS:
             raise NativeHostError(f'Unsupported command: {command}', code='UNSUPPORTED_COMMAND')

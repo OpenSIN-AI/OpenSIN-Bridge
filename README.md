@@ -89,22 +89,65 @@
 
 ```
 OpenSIN-Bridge/
-+-- extension/           # Chrome Extension (Thin Client - publishable)
-|   +-- manifest.json
-|   +-- background/      # Service Worker
-|   +-- content/         # Content Scripts (DOM extraction)
-|   +-- popup/           # Login + License UI
-|   +-- icons/
-+-- server/              # Cloudflare Workers (SECRET SAUCE)
-|   +-- src/
-|   |   +-- routes/      # API endpoints
-|   |   +-- middleware/   # Auth, rate limiting, license check
-|   |   +-- services/    # LLM engine, persona, anti-detection
-|   +-- wrangler/        # Cloudflare config
-+-- docs/                # Architecture documentation
-+-- scripts/             # Build, deploy, publish scripts
-+-- .github/workflows/   # CI/CD (n8n dispatch)
+|-- extension/                   # Chrome MV3 extension
+|   |-- manifest.json            # MV3 manifest (strict CSP, scoped perms)
+|   |-- icons/                   # 16/32/48/128 png set
+|   `-- src/
+|       |-- background/
+|       |   `-- service-worker.js        # Boot + lifecycle orchestrator
+|       |-- content/
+|       |   |-- bridge-isolated.js       # Isolated-world RPC handler
+|       |   `-- stealth-main.js          # MAIN-world stealth shim
+|       |-- core/                        # config, logger, errors, state,
+|       |                                # rpc, lifecycle, utils
+|       |-- drivers/                     # tabs, cdp, offscreen,
+|       |                                # behavior-store
+|       |-- automation/                  # human, clicker, typer,
+|       |                                # snapshot, vision, vision-locate
+|       |-- tools/                       # 92 registered RPC tools
+|       |   |-- tabs / navigation / dom
+|       |   |-- cookies / storage / network
+|       |   |-- session / system / vision / behavior
+|       |   `-- aliases.js               # legacy flat -> dotted names
+|       |-- transports/                  # ws, native, external
+|       |-- offscreen/                   # clipboard/parser sandbox
+|       |-- popup/ | options/            # operator UI
+|       `-- shared/                      # deterministic primitives
+|-- server.js                    # WebSocket bridge + MCP/HTTP relay
+|-- native-host/                 # Native messaging host (CSP escape)
+|-- docs/                        # Architecture & workflow docs
+`-- scripts/                     # Build, test, deploy
 ```
+
+## Agent Tool Surface
+
+All 92 RPC tools are exposed on a single namespaced router. Agents can call
+them over three transports (WebSocket, Native Messaging, or
+`externally_connectable` page messaging) using the same JSON-RPC envelope:
+
+```jsonc
+{ "type": "tool_request", "id": 42, "method": "dom.click",
+  "params": { "selector": "button[type=submit]" } }
+```
+
+Canonical namespaces:
+
+- `tabs.*`       — list / create / close / activate / group / move / duplicate
+- `nav.*`        — goto / back / forward / reload / waitForLoad
+- `dom.*`        — click / type / fill / select / scroll / hover / evaluate /
+                   getText / getHtml / query / waitForSelector / snapshot
+- `cookies.*`    — get / set / delete / getAll / stores / clearForDomain
+- `storage.*`    — local/session/indexedDB read+write, extension storage
+- `net.*`        — fetch, captureStart/Stop, setExtraHeaders, setUserAgent,
+                   block, throttle
+- `session.*`    — export / import cookies + storage for domain reuse
+- `system.*`     — health / uptime / notify / downloads / clipboard / version
+- `vision.*`     — locate (model-based element locate) / read (OCR)
+- `behavior.*`   — recording start/stop/export for session replay
+
+Legacy flat names (`tabs_list`, `click`, `navigate`, `get_page_content`, ...)
+are automatically re-routed to their dotted equivalents through
+`tools/aliases.js`, so older agent harnesses keep working without changes.
 
 ## Development
 

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenSIN Bridge</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="brand">
+        <img src="../../icons/icon48.png" alt="" width="24" height="24" />
+        <div class="brand-text">
+          <h1>OpenSIN Bridge</h1>
+          <span id="version" class="subtitle">v—</span>
+        </div>
+      </div>
+      <button id="open-options" class="btn btn-ghost" title="Open options">Settings</button>
+    </header>
+
+    <main class="body">
+      <section class="card">
+        <div class="row">
+          <div>
+            <div class="label">Server (WebSocket)</div>
+            <div id="ws-url" class="muted">—</div>
+          </div>
+          <span id="ws-status" class="pill pill-idle">idle</span>
+        </div>
+        <div class="row-actions">
+          <button id="ws-start" class="btn btn-primary">Start</button>
+          <button id="ws-stop" class="btn">Stop</button>
+          <button id="ws-reload" class="btn btn-ghost">Reload</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="row">
+          <div>
+            <div class="label">Native Host</div>
+            <div id="native-host" class="muted">com.opensin.bridge</div>
+          </div>
+          <span id="native-status" class="pill pill-idle">idle</span>
+        </div>
+        <div class="row-actions">
+          <button id="native-start" class="btn">Connect</button>
+          <button id="native-stop" class="btn">Disconnect</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="label">Client</div>
+        <code id="client-id" class="code">—</code>
+      </section>
+
+      <section class="card">
+        <div class="row">
+          <div class="label">Capabilities</div>
+          <span id="tool-count" class="muted">—</span>
+        </div>
+        <div id="capability-list" class="pill-grid"></div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span id="health-dot" class="dot"></span>
+      <span id="health-text" class="muted">booting…</span>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
