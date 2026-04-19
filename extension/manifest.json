@@ -1,67 +1,93 @@
 {
-    "manifest_version": 3,
-    "name": "OpenSIN Bridge",
-    "version": "4.0.0",
-    "description": "OpenSIN Browser Automation & Auth Platform (Antigravity-Level+)",
-    "action": {
-        "default_title": "OpenSIN Bridge",
-        "default_icon": {
-            "16": "static/icons/16.png",
-            "48": "static/icons/48.png",
-            "128": "static/icons/128.png"
-        }
+  "manifest_version": 3,
+  "name": "OpenSIN Bridge",
+  "short_name": "OpenSIN",
+  "version": "5.0.0",
+  "description": "OpenSIN Bridge - Agent-first browser automation with deterministic verification.",
+  "minimum_chrome_version": "120",
+  "author": "OpenSIN-AI",
+  "homepage_url": "https://opensin.ai",
+
+  "action": {
+    "default_title": "OpenSIN Bridge",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "static/icons/16.png",
+      "48": "static/icons/48.png",
+      "128": "static/icons/128.png"
+    }
+  },
+
+  "icons": {
+    "16": "static/icons/16.png",
+    "48": "static/icons/48.png",
+    "128": "static/icons/128.png"
+  },
+
+  "background": {
+    "service_worker": "src/sw.js",
+    "type": "module"
+  },
+
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN",
+      "js": ["src/content/main-world.js"]
     },
-    "background": {
-        "service_worker": "background/service_worker.js",
-        "type": "module"
-    },
-    "chrome_url_overrides": {
-        "newtab": "static/browserLanding.html"
-    },
-    "content_scripts": [
-        {
-            "all_frames": true,
-            "js": [
-                "shared/deterministic-primitives.js",
-                "content/injector.js"
-            ],
-            "matches": [
-                "<all_urls>"
-            ],
-            "run_at": "document_start",
-            "world": "MAIN"
-        }
-    ],
-    "content_security_policy": {
-        "extension_pages": "script-src 'self'; connect-src 'self' wss://openjerro-opensin-bridge-mcp.hf.space ws://localhost:*; frame-src http://localhost:*;"
-    },
-    "externally_connectable": {
-        "matches": [
-            "https://opensin.ai/*",
-            "http://localhost/*",
-            "http://127.0.0.1/*"
-        ]
-    },
-    "host_permissions": [
-        "<all_urls>"
-    ],
-    "icons": {
-        "16": "static/icons/16.png",
-        "48": "static/icons/48.png",
-        "128": "static/icons/128.png"
-    },
-    "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmnTx47DosuBK2cI8q+aUVYQc+MIxtATqRJkGO7yJO4/nFU6CyiCe4PDQ/L6uQw24mX079xsWXVOreLD565b0t2AMr8fzNJiUSyzvslE1grb7tqNDT97WYRma8EyrKDasb+pLE/TkSmqpafFxpQfbhBNb0RTb2l/nqAS9QW5WqjaAeUBCGQrenuKUkCX2/+xCACEAfpSg+uijtR0gbuJCjT4oPgJynSQxVbzZ38mKIQcWauY/CcNRD2RuCQwlxHWm0YqrQfVWnxoDR8oMhujVfdmKEKd8hW24C3DqqidVAMjk0qNlnTGbPeJBjdO/ogFmL8CXiE1dYYqD6Dxb8MqmoQIDAQAB",
-    "permissions": [
-        "activeTab",
-        "tabs",
-        "webRequest",
-        "storage",
-        "offscreen",
-        "cookies",
-        "nativeMessaging",
-        "scripting",
-        "declarativeNetRequest",
-        "alarms",
-        "debugger"
+    {
+      "matches": ["<all_urls>"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "ISOLATED",
+      "js": ["src/content/isolated-world.js"]
+    }
+  ],
+
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "storage",
+    "cookies",
+    "alarms",
+    "offscreen",
+    "debugger",
+    "webRequest",
+    "declarativeNetRequest",
+    "nativeMessaging",
+    "tabCapture",
+    "proxy",
+    "notifications"
+  ],
+
+  "host_permissions": [
+    "<all_urls>"
+  ],
+
+  "optional_permissions": [
+    "management"
+  ],
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https: wss:; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:;"
+  },
+
+  "externally_connectable": {
+    "matches": [
+      "https://*.opensin.ai/*",
+      "https://opensin.ai/*",
+      "http://localhost:*/*",
+      "http://127.0.0.1:*/*"
     ]
+  },
+
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmnTx47DosuBK2cI8q+aUVYQc+MIxtATqRJkGO7yJO4/nFU6CyiCe4PDQ/L6uQw24mX079xsWXVOreLD565b0t2AMr8fzNJiUSyzvslE1grb7tqNDT97WYRma8EyrKDasb+pLE/TkSmqpafFxpQfbhBNb0RTb2l/nqAS9QW5WqjaAeUBCGQrenuKUkCX2/+xCACEAfpSg+uijtR0gbuJCjT4oPgJynSQxVbzZ38mKIQcWauY/CcNRD2RuCQwlxHWm0YqrQfVWnxoDR8oMhujVfdmKEKd8hW24C3DqqidVAMjk0qNlnTGbPeJBjdO/ogFmL8CXiE1dYYqD6Dxb8MqmoQIDAQAB"
 }
