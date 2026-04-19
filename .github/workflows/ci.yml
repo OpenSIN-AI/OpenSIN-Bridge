@@ -38,12 +38,42 @@ jobs:
       - name: Run stealth tests
         run: node --test test/stealth/stealth-main.test.mjs
 
-      - name: Verify manifest points to stealth-main.js
+      - name: Verify manifest points to stealth-main.js and debug-console.js
         # A cheap sanity check so a future refactor cannot silently
-        # break the MAIN-world injection path.
+        # break the MAIN-world injection path. Parse the JSON properly
+        # so we don't break on formatting (e.g. extra entries, reflow).
         run: |
-          grep -q '"js": \["src/content/stealth-main.js"\]' extension/manifest.json \
-            || (echo "manifest.json no longer references stealth-main.js" && exit 1)
+          node -e "
+            const m = require('./extension/manifest.json');
+            const mainWorld = (m.content_scripts || []).find(
+              (cs) => cs.world === 'MAIN'
+            );
+            if (!mainWorld) {
+              console.error('No MAIN-world content_scripts entry');
+              process.exit(1);
+            }
+            if (!mainWorld.js.includes('src/content/stealth-main.js')) {
+              console.error('MAIN-world entry no longer lists stealth-main.js');
+              process.exit(1);
+            }
+            if (!mainWorld.js.includes('src/content/debug-console.js')) {
+              console.error('MAIN-world entry no longer lists debug-console.js');
+              process.exit(1);
+            }
+            // stealth-main MUST load BEFORE debug-console because the
+            // latter consults window.__OPENSIN_STEALTH__.markNative.
+            const stealthIdx = mainWorld.js.indexOf('src/content/stealth-main.js');
+            const debugIdx = mainWorld.js.indexOf('src/content/debug-console.js');
+            if (!(stealthIdx < debugIdx)) {
+              console.error('stealth-main.js must load before debug-console.js');
+              process.exit(1);
+            }
+            if (mainWorld.run_at !== 'document_start') {
+              console.error('MAIN-world scripts must run at document_start');
+              process.exit(1);
+            }
+            console.log('manifest content_scripts OK');
+          "
 
       - name: Verify legacy fallback still present
         # Guarantees the rollback path documented in CHANGELOG + README.

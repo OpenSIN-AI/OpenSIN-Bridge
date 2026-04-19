@@ -1,5 +1,60 @@
 # Changelog
 
+## Unreleased — Debug tracing
+
+New observability tool group so agents (and the humans debugging them)
+can see *what the browser actually did* in response to each bridge
+call. Motivated by the HeyPiggy survey-worker post-mortem (issue #61
+of the Worker repo) where a failing agent produced `dom.click ok`
+three times in a row with no structured signal of why nothing
+happened in the viewport.
+
+### Added
+
+- `extension/src/content/debug-console.js` — MAIN-world content script
+  at `document_start`, ring-buffer capture of `console.error`,
+  `console.warn`, `window.onerror`, `unhandledrejection`. Exposed via
+  `window.__OPENSIN_DEBUG_CONSOLE__` as a non-enumerable,
+  non-writable, non-configurable surface.
+- `extension/src/tools/debug.js` — tool group registering:
+  - `debug.startSession` / `debug.endSession`
+  - `debug.snapshotState` — one-shot url/title/DOM fingerprint/console
+  - `debug.traceAction` — wraps any inner router call with
+    before/after capture + diff (URL change, body change, node delta,
+    interactive delta, new console entries) + optional screenshot
+  - `debug.getTrace` / `debug.clearTrace`
+  - `debug.getConsoleErrors`
+- `extension/manifest.json` — MAIN-world `content_scripts` entry now
+  lists `stealth-main.js` followed by `debug-console.js`. Load order
+  matters: the debug hook consults `__OPENSIN_STEALTH__.markNative` for
+  native-toString inheritance, so stealth-main must load first.
+- `test/stealth/debug-console.test.mjs` — 12 unit tests via
+  `node --test`, exercising capacity cap, `.clear()` semantics,
+  idempotency, Error serialization, `window-error` +
+  `unhandledrejection` event capture, and URL-at-capture-time
+  correctness.
+- `test/stealth/debug-diff.test.mjs` — 9 unit tests covering
+  `computeDiff` across URL / title / body / node-count changes,
+  missing-fingerprint tolerance, `summarize` payload stripping, and
+  `randomId` uniqueness over 200 samples.
+- `docs/debug-tracing.md` — tool reference, architecture
+  (why MAIN-world hook instead of CDP `Runtime.consoleAPICalled`),
+  storage footprint, worker integration example.
+
+### Changed
+
+- `.github/workflows/ci.yml` — the manifest check no longer greps for
+  an exact `"js": ["src/content/stealth-main.js"]` literal; it parses
+  the JSON and asserts that the MAIN-world entry contains both
+  `stealth-main.js` and `debug-console.js`, in that order, at
+  `document_start`. Robust against formatting changes.
+
+### Storage
+
+`chrome.storage.session` is used (not `storage.local`) for trace
+records: survives service-worker suspension within a browser session,
+cleared on browser restart so traces never leak to disk.
+
 ## Unreleased — Stealth v2 overhaul
 
 The main-world stealth layer (`extension/src/content/stealth-main.js`) has been
