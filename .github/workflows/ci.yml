@@ -1,0 +1,99 @@
+name: CI
+
+# Runs on every push to any branch and every PR targeting main.
+# Keep it fast — this gate decides whether Bridge ships or not.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  stealth-tests:
+    name: Stealth layer unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          # The repo has no top-level lockfile for the extension path,
+          # so we skip the npm cache to avoid spurious "no lockfile" warnings.
+          cache: ""
+
+      # The stealth test harness imports the production file as plain text
+      # and evaluates it inside a handcrafted stub — zero runtime deps.
+      # If that changes in the future, add `npm ci` here.
+      - name: Run stealth tests
+        run: node --test test/stealth/stealth-main.test.mjs
+
+      - name: Verify manifest points to stealth-main.js and debug-console.js
+        # A cheap sanity check so a future refactor cannot silently
+        # break the MAIN-world injection path. Parse the JSON properly
+        # so we don't break on formatting (e.g. extra entries, reflow).
+        run: |
+          node -e "
+            const m = require('./extension/manifest.json');
+            const mainWorld = (m.content_scripts || []).find(
+              (cs) => cs.world === 'MAIN'
+            );
+            if (!mainWorld) {
+              console.error('No MAIN-world content_scripts entry');
+              process.exit(1);
+            }
+            if (!mainWorld.js.includes('src/content/stealth-main.js')) {
+              console.error('MAIN-world entry no longer lists stealth-main.js');
+              process.exit(1);
+            }
+            if (!mainWorld.js.includes('src/content/debug-console.js')) {
+              console.error('MAIN-world entry no longer lists debug-console.js');
+              process.exit(1);
+            }
+            // stealth-main MUST load BEFORE debug-console because the
+            // latter consults window.__OPENSIN_STEALTH__.markNative.
+            const stealthIdx = mainWorld.js.indexOf('src/content/stealth-main.js');
+            const debugIdx = mainWorld.js.indexOf('src/content/debug-console.js');
+            if (!(stealthIdx < debugIdx)) {
+              console.error('stealth-main.js must load before debug-console.js');
+              process.exit(1);
+            }
+            if (mainWorld.run_at !== 'document_start') {
+              console.error('MAIN-world scripts must run at document_start');
+              process.exit(1);
+            }
+            console.log('manifest content_scripts OK');
+          "
+
+      - name: Verify legacy fallback still present
+        # Guarantees the rollback path documented in CHANGELOG + README.
+        run: test -f extension/src/content/stealth-legacy.js
+
+  manifest-lint:
+    name: Manifest.json is valid JSON + MV3
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and validate manifest
+        run: |
+          node -e "
+            const m = require('./extension/manifest.json');
+            if (m.manifest_version !== 3) { console.error('Not MV3'); process.exit(1); }
+            if (!m.background || !m.background.service_worker) {
+              console.error('Missing service_worker'); process.exit(1);
+            }
+            if (!Array.isArray(m.content_scripts) || m.content_scripts.length === 0) {
+              console.error('Missing content_scripts'); process.exit(1);
+            }
+            console.log('manifest.json OK, version:', m.version);
+          "

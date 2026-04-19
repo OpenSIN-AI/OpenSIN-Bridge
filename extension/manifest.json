@@ -40,7 +40,7 @@
       "run_at": "document_start",
       "all_frames": true,
       "world": "MAIN",
-      "js": ["src/content/stealth-main.js"]
+      "js": ["src/content/stealth-main.js", "src/content/debug-console.js"]
     },
     {
       "matches": ["<all_urls>"],
