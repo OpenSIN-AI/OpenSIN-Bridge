@@ -28,10 +28,18 @@ const log = createLogger("bg")
 
 attachGlobalErrorHandlers()
 
+// Remember when the service worker booted — read by system.health.
+globalThis.__bridgeStart = Date.now()
+
 async function bootstrap() {
   log.info("OpenSIN Bridge booting…")
+
+  // CDP relies on global chrome.debugger.onDetach / onEvent routing. This MUST
+  // be installed exactly once, before any driver tries to send CDP commands.
+  CDP.installCdpListeners()
+
   await initConfig()
-  State.init()
+  await State.init()
 
   let clientId = (await chrome.storage.local.get("opensin:clientId"))["opensin:clientId"]
   if (!clientId) {

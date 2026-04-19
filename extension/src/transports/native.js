@@ -41,18 +41,24 @@ export function create({ router, hostName = CONFIG.nativeHost, clientId }) {
       send({ type: "hello.ack", clientId, version: CONFIG.version })
       return
     }
-    if (msg?.id && (msg.method || msg.tool)) {
+    const isToolRequest =
+      msg?.id !== undefined &&
+      (msg.type === "tool_request" || msg.type === "rpc" || !msg.type) &&
+      (msg.method || msg.tool)
+    if (isToolRequest) {
       const method = msg.method || msg.tool
       const params = msg.params || msg.args || {}
       const start = Date.now()
       try {
         const result = await router.invoke(method, params, { transport: "native" })
-        send({ id: msg.id, ok: true, result, durationMs: Date.now() - start })
+        send({ type: "tool_response", id: msg.id, ok: true, result, durationMs: Date.now() - start })
       } catch (e) {
         send({
+          type: "tool_response",
           id: msg.id,
           ok: false,
-          error: { code: e.code || "INTERNAL", message: e.message, details: e.details },
+          error: e.message,
+          errorDetail: { code: e.code || "INTERNAL", message: e.message, data: e.data },
           durationMs: Date.now() - start,
         })
       }

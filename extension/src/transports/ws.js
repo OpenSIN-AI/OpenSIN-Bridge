@@ -102,7 +102,7 @@ export function create({ router, url = CONFIG.wsUrl, clientId }) {
       log.warn("non-JSON message", e)
       return
     }
-    if (msg.type === "pong") return
+    if (msg.type === "pong" || msg.type === "ping") return
     if (msg.type === "hello") {
       send({
         type: "hello.ack",
@@ -112,19 +112,40 @@ export function create({ router, url = CONFIG.wsUrl, clientId }) {
       })
       return
     }
-    // Request envelope: { id, method, params } or { id, type: "rpc", ... }
-    if (msg.id && (msg.method || msg.tool)) {
+
+    // Tool request. Accepted envelopes (all interchangeable):
+    //   { type: "tool_request", id, method, params }   // Hugging Face server
+    //   { type: "rpc",          id, method, params }
+    //   {                       id, method, params }   // bare JSON-RPC
+    //   {                       id, tool,   args   }
+    const isToolRequest =
+      msg.id !== undefined &&
+      (msg.type === "tool_request" || msg.type === "rpc" || !msg.type) &&
+      (msg.method || msg.tool)
+
+    if (isToolRequest) {
       const method = msg.method || msg.tool
       const params = msg.params || msg.args || {}
       const start = Date.now()
+      const replyType = msg.type === "tool_request" ? "tool_response" : "tool_response"
       try {
         const result = await router.invoke(method, params, { transport: "ws" })
-        send({ id: msg.id, ok: true, result, durationMs: Date.now() - start })
+        // Canonical response: server.js checks msg.type === 'tool_response' &&
+        // msg.id to resolve pending requests.
+        send({
+          type: replyType,
+          id: msg.id,
+          ok: true,
+          result,
+          durationMs: Date.now() - start,
+        })
       } catch (e) {
         send({
+          type: replyType,
           id: msg.id,
           ok: false,
-          error: { code: e.code || "INTERNAL", message: e.message, details: e.details },
+          error: e.message,
+          errorDetail: { code: e.code || "INTERNAL", message: e.message, data: e.data },
           durationMs: Date.now() - start,
         })
       }
@@ -149,12 +170,16 @@ export function create({ router, url = CONFIG.wsUrl, clientId }) {
       log.info(`connected to ${url}`)
       attempt = 0
       setStatus(STATE.OPEN)
+      // Server expects `version` and `toolsCount`; keep `capabilities` for
+      // debugging / richer clients.
+      const tools = router.list()
       send({
         type: "register",
         clientId,
         version: CONFIG.version,
         userAgent: navigator.userAgent,
-        capabilities: { tools: router.list() },
+        toolsCount: tools.length,
+        capabilities: { tools },
         ts: Date.now(),
       })
       startHeartbeat()

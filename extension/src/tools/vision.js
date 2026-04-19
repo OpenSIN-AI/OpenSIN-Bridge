@@ -9,7 +9,7 @@
 import { invariant, BridgeError } from "../core/errors.js"
 import * as Tabs from "../drivers/tabs.js"
 import * as CDP from "../drivers/cdp.js"
-import { locate } from "../automation/vision.js"
+import { locate, transcribe } from "../automation/vision-locate.js"
 
 export function register(router) {
   router.register("vision.locate", async ({ tabId, prompt } = {}) => {
@@ -50,13 +50,11 @@ export function register(router) {
     return { ok: true, x: loc.x, y: loc.y, confidence: loc.confidence ?? null }
   })
 
-  router.register("vision.read", async ({ tabId, region } = {}) => {
+  router.register("vision.read", async ({ tabId } = {}) => {
     const id = await Tabs.resolveTabId(tabId)
     const tab = await Tabs.get(id)
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" })
-    // OCR is delegated to the vision provider. If a region is provided we ask
-    // the model to only transcribe that bbox.
-    const res = await locate({ dataUrl, prompt: "Transcribe all visible text. Respond with {\"text\": \"...\"}", region })
-    return { text: res?.text || "" }
+    const res = await transcribe({ dataUrl })
+    return { text: res?.text || "", provider: res?.provider, model: res?.model }
   })
 }
