@@ -1,238 +1,252 @@
-# OpenSIN-Bridge
+# OpenSIN Bridge
 
-> **OpenSIN ist keine Software. Es ist eine digitale Belegschaft.**
-> Die Bridge ist die sichere Tuer, durch die Nutzer auf die Intelligenz unserer Agenten zugreifen. Der Agent arbeitet (z.B. auf Prolific), die Intelligenz bleibt im Server.
+A Chrome Manifest V3 extension that turns the user's real Chrome
+profile into a scriptable browser for AI agents. The extension
+exposes a JSON-RPC tool surface (92 tools over three transports —
+WebSocket, Native Messaging, and `externally_connectable`); the
+business logic lives on a Cloudflare Workers API.
 
-> **Paid SaaS Chrome Extension (5 EUR/month) — Thin-Client Architecture**
->
-> The extension is a dumb shell. All intelligence lives on our servers. Competitors who clone the extension get NOTHING.
+The bridge is designed for workflows that need the session state of
+a real human (cookies, passwords, Autofill, Fingerprint) — paid
+research panels, CRM automation, any platform that blocks
+Playwright/Puppeteer on sight. It is **not** a hermetic testing
+tool; for that, Playwright remains a better choice.
 
 ## Architecture
 
 ```
-+------------------------+         +------------------------------+
-|  Chrome Extension      |  JWT    |  Cloudflare Workers API      |
-|  (Thin Client - FREE)  | ------> |  (Secret Sauce - PRIVATE)    |
-|                        | <------ |                              |
-|  - Login UI            |  Auth   |  - LLM Decision Engine       |
-|  - DOM Extractor       |         |  - Study Evaluator           |
-|  - Action Executor     |         |  - Anti-Detection Logic      |
-|  - WebSocket Bridge    |         |  - Persona Engine            |
-|  - License Key Input   |         |  - Stripe Sub Validation     |
-|                        |         |  - Rate Limiting             |
-+------------------------+         +------------------------------+
-       WORTHLESS                          PRICELESS
-   (can be cloned                     (code is SECRET,
-    — doesn't matter)                  runs on OUR servers)
-
-                              |
-                              v
-                   +---------------------+
-                   |  Supabase           |
-                   |  - Auth (users)     |
-                   |  - Subscriptions    |
-                   |  - Usage Tracking   |
-                   |  - License Keys     |
-                   +---------------------+
-                              |
-                              v
-                   +---------------------+
-                   |  Stripe             |
-                   |  - 5 EUR/month      |
-                   |  - Webhook Events   |
-                   |  - Invoice + Tax    |
-                   +---------------------+
++----------------------------+       JSON-RPC / WebSocket        +----------------------------+
+|  Chrome MV3 Extension      | <--------------------------------> |  Cloudflare Workers API    |
+|  (runs in user's Chrome)   |             JWT                    |                            |
+|                            |                                    |  - Session validation       |
+|  - 92 RPC tools            |                                    |  - Rate limiting            |
+|  - Accessibility-tree      |                                    |  - Usage tracking           |
+|    snapshots               |                                    |  - Stripe subscription gate |
+|  - Multi-strategy clicker  |                                    |                            |
+|    (CDP -> DOM -> dispatch)|                                    +----------------------------+
+|  - Stealth layer v2        |                                                |
+|  - Offscreen document for  |                                                v
+|    clipboard / audio       |                                    +----------------------------+
+|  - Native messaging host   |                                    |  Supabase + Stripe          |
++----------------------------+                                    |  Auth / subs / usage log    |
+                                                                  +----------------------------+
 ```
 
-## Security Model
+## Why this over Playwright / Stagehand / Skyvern
 
-| Layer | What | Protected? |
-|-------|------|-----------|
-| Extension Source Code | DOM extraction, UI, WebSocket client | NO (client-side, visible) |
-| Server Business Logic | LLM prompts, decision trees, anti-detection | YES (Cloudflare Workers, never exposed) |
-| API Keys / Secrets | OpenAI, Supabase, Stripe keys | YES (server-side env vars only) |
-| License Validation | Subscription check on every API call | YES (server rejects invalid keys) |
-| User Data | Profile answers, study history | YES (encrypted in Supabase) |
+Most agent browsers spawn a fresh Chromium with no profile. That is
+perfect for deterministic tests and terrible for sites that gate
+access on a real-user session. Bridge flips the default:
 
-## What a Competitor Gets by Cloning
+| Dimension                | Playwright-based tools | OpenSIN Bridge |
+|--------------------------|------------------------|----------------|
+| Chrome instance          | Spawned Chromium        | User's installed Chrome |
+| Profile / cookies / 2FA  | Empty, synthetic        | Real, pre-authenticated |
+| `navigator.webdriver`    | `true` (leaks)          | `undefined` (v2 stealth) |
+| Chrome debugger banner   | Not applicable          | Yes (CDP attach)        |
+| Headful                  | Optional                | Default — user watches  |
+| Primary use case         | Testing, scraping       | Session-bound automation |
 
-| They Get | They DON'T Get |
-|----------|---------------|
-| Empty extension shell | Our LLM decision engine |
-| DOM extraction code | Our anti-detection algorithms |
-| WebSocket client | Our persona engine |
-| Login UI | Our Stripe/Supabase backend |
-| popup.html | Our server API (requires valid subscription) |
+The stealth layer is deliberately single-purpose: it is not trying
+to be a universal anti-detection framework. It neutralizes the
+primitives that `chrome.debugger.attach` disturbs and a handful of
+well-known headless-chrome fingerprints — see
+[`docs/stealth-v2.md`](docs/stealth-v2.md) for the exact surface.
 
-**Result: A cloned extension is 100% useless without our server.**
+## Agent tool surface
 
-## Pricing
+All 92 tools are served from a single namespaced router. The wire
+format is a plain JSON-RPC envelope:
 
-| Plan | Price | Features |
-|------|-------|----------|
-| Free Install | 0 EUR | Extension installs, login screen shows |
-| OpenSIN Pro | 5 EUR/month | Full access to all Bridge features |
-| OpenSIN Team | 15 EUR/month | 5 seats, priority support, custom personas |
+```jsonc
+{
+  "type": "tool_request",
+  "id": 42,
+  "method": "dom.click",
+  "params": { "selector": "button[type=submit]" }
+}
+```
 
-## Tech Stack
+Namespaces:
 
-| Component | Technology | Cost |
-|-----------|-----------|------|
-| Extension | Chrome MV3, vanilla JS | FREE |
-| API Gateway | Cloudflare Workers | FREE (100k req/day) |
-| Auth + DB | Supabase | FREE (50k MAU) |
-| Payments | Stripe | 2.9% + 0.30 EUR/tx |
-| LLM Backend | OpenAI via opencode CLI | Variable |
-| Distribution | Chrome Web Store | 5 USD one-time |
+- `tabs.*`     — list, create, close, activate, group, move, duplicate
+- `nav.*`      — goto, back, forward, reload, waitForLoad
+- `dom.*`      — click, type, fill, select, scroll, hover, evaluate,
+                 getText, getHtml, query, waitForSelector, snapshot
+- `cookies.*`  — get, set, delete, getAll, stores, clearForDomain
+- `storage.*`  — local / session / indexedDB read+write, extension
+                 storage
+- `net.*`      — fetch, captureStart / Stop, setExtraHeaders,
+                 setUserAgent, block, throttle
+- `session.*`  — export / import cookies + storage for domain reuse
+- `system.*`   — health, uptime, notify, downloads, clipboard, version
+- `vision.*`   — locate (model-based element locate), read (OCR)
+- `behavior.*` — recording start / stop / export for session replay
 
-## Repository Structure
+Flat aliases (`click`, `navigate`, `get_page_content`, `tabs_list`,
+...) are mapped to their dotted equivalents in
+`extension/src/tools/aliases.js`, so existing agent harnesses keep
+working.
+
+## Clicker model
+
+The clicker runs a three-stage fallback for every click:
+
+1. **CDP mouse input** — dispatches real `mousemove`,
+   `mousedown`, `mouseup` events through
+   `Input.dispatchMouseEvent`. This is indistinguishable from a
+   human click from the page's perspective.
+2. **DOM click()** — calls `element.click()` if the CDP path is
+   blocked (certain `iframe` sandbox configurations).
+3. **DOM dispatch** — synthesizes `MouseEvent` and dispatches it
+   directly. Final fallback.
+
+Every click is followed by an interaction proof: a DOM-diff hash
+and an optional screenshot delta. The tool call does not return
+`ok: true` unless the page actually reacted to the click — the
+agent gets honest feedback instead of a false positive.
+
+## Snapshot model
+
+Snapshots come from Chrome's Accessibility tree (via CDP's
+`Accessibility.getFullAXTree`). Every interactive node gets a
+stable in-memory handle (`@e1`, `@e2`, ...) that later tool calls
+can reference without reasoning about CSS selectors. A fresh
+snapshot clears the map so an old handle cannot target a rerendered
+element.
+
+The tree is compacted before returning — structural roles with no
+name are dropped, skip roles (`generic`, `group` without name) are
+collapsed. Median tree size on a modern web app is around 4 KB
+compared to 200 KB+ for a raw DOM dump.
+
+## Stealth layer v2
+
+Runs as a MAIN-world content script at `document_start` on every
+frame. 17 evasion modules cover:
+
+- `navigator.webdriver`, `plugins`, `mimeTypes`, `languages`,
+  `hardwareConcurrency`, `deviceMemory`, `permissions.query`,
+  `userAgent`, `mediaDevices`, `getBattery`, `connection`
+- `window.chrome.runtime`, `outerWidth`, `outerHeight`
+- `HTMLIFrameElement.contentWindow`
+- WebGL `getParameter` (vendor + renderer spoof)
+- Canvas `toDataURL` / `getImageData` (micro-noise)
+- AudioContext `getChannelData` (micro-noise)
+- `Function.prototype.toString` (Proxy-preserved native signature)
+
+Every module is idempotent, try/catch-wrapped, and its status is
+introspectable via `window.__opensin_stealth_status__()` for use
+by internal test harnesses. See
+[`docs/stealth-v2.md`](docs/stealth-v2.md) and
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
+## Repository layout
 
 ```
 OpenSIN-Bridge/
-|-- extension/                   # Chrome MV3 extension
-|   |-- manifest.json            # MV3 manifest (strict CSP, scoped perms)
-|   |-- icons/                   # 16/32/48/128 png set
+|-- extension/                   Chrome MV3 extension
+|   |-- manifest.json
+|   |-- icons/
 |   `-- src/
-|       |-- background/
-|       |   `-- service-worker.js        # Boot + lifecycle orchestrator
+|       |-- background/service-worker.js
 |       |-- content/
-|       |   |-- bridge-isolated.js       # Isolated-world RPC handler
-|       |   `-- stealth-main.js          # MAIN-world stealth shim
-|       |-- core/                        # config, logger, errors, state,
-|       |                                # rpc, lifecycle, utils
-|       |-- drivers/                     # tabs, cdp, offscreen,
-|       |                                # behavior-store
-|       |-- automation/                  # human, clicker, typer,
-|       |                                # snapshot, vision, vision-locate
-|       |-- tools/                       # 92 registered RPC tools
-|       |   |-- tabs / navigation / dom
-|       |   |-- cookies / storage / network
-|       |   |-- session / system / vision / behavior
-|       |   `-- aliases.js               # legacy flat -> dotted names
-|       |-- transports/                  # ws, native, external
-|       |-- offscreen/                   # clipboard/parser sandbox
-|       |-- popup/ | options/            # operator UI
-|       `-- shared/                      # deterministic primitives
-|-- server.js                    # WebSocket bridge + MCP/HTTP relay
-|-- native-host/                 # Native messaging host (CSP escape)
-|-- docs/                        # Architecture & workflow docs
-`-- scripts/                     # Build, test, deploy
+|       |   |-- bridge-isolated.js      RPC handler (isolated world)
+|       |   |-- stealth-main.js         Stealth v2 (main world)
+|       |   `-- stealth-legacy.js       v1 shim, kept for rollback
+|       |-- core/                       config, logger, errors, rpc,
+|       |                               state, lifecycle, utils
+|       |-- drivers/                    tabs, cdp, offscreen,
+|       |                               behavior-store
+|       |-- automation/                 human, clicker, typer,
+|       |                               snapshot, vision,
+|       |                               vision-locate
+|       |-- tools/                      92 RPC tools + aliases
+|       |-- transports/                 ws, native, external
+|       |-- offscreen/                  clipboard / audio sandbox
+|       |-- popup/ | options/           operator UI
+|       `-- shared/                     deterministic primitives
+|-- server.js                    WebSocket bridge + MCP/HTTP relay
+|-- native-host/                 Native messaging host
+|-- docs/
+|   |-- BENCHMARKS.md            Stealth verification procedure
+|   |-- stealth-v2.md            Stealth architecture & rationale
+|   |-- ISSUE_SCOPED_EXECUTION.md
+|   `-- PR_ISOLATION_CHECKLIST.md
+|-- test/
+|   |-- stealth/                 Stealth v2 Node unit tests
+|   |-- *.test.js | *.test.mjs   Other regression suites
+`-- scripts/                     Build, test, deploy
 ```
-
-## Agent Tool Surface
-
-All 92 RPC tools are exposed on a single namespaced router. Agents can call
-them over three transports (WebSocket, Native Messaging, or
-`externally_connectable` page messaging) using the same JSON-RPC envelope:
-
-```jsonc
-{ "type": "tool_request", "id": 42, "method": "dom.click",
-  "params": { "selector": "button[type=submit]" } }
-```
-
-Canonical namespaces:
-
-- `tabs.*`       — list / create / close / activate / group / move / duplicate
-- `nav.*`        — goto / back / forward / reload / waitForLoad
-- `dom.*`        — click / type / fill / select / scroll / hover / evaluate /
-                   getText / getHtml / query / waitForSelector / snapshot
-- `cookies.*`    — get / set / delete / getAll / stores / clearForDomain
-- `storage.*`    — local/session/indexedDB read+write, extension storage
-- `net.*`        — fetch, captureStart/Stop, setExtraHeaders, setUserAgent,
-                   block, throttle
-- `session.*`    — export / import cookies + storage for domain reuse
-- `system.*`     — health / uptime / notify / downloads / clipboard / version
-- `vision.*`     — locate (model-based element locate) / read (OCR)
-- `behavior.*`   — recording start/stop/export for session replay
-
-Legacy flat names (`tabs_list`, `click`, `navigate`, `get_page_content`, ...)
-are automatically re-routed to their dotted equivalents through
-`tools/aliases.js`, so older agent harnesses keep working without changes.
 
 ## Development
 
 ```bash
-# Install dependencies
-bun install
+# Dependencies
+pnpm install
 
-# Run extension in dev mode
-bun run ext:dev
+# Load the extension in a dev Chrome
+pnpm run ext:dev
+# -> open chrome://extensions, enable Developer Mode, load-unpacked
+#    pointing at ./extension
 
-# Run server locally
-bun run server:dev
+# Run the stealth unit suite
+pnpm run test:stealth
 
-# Run the fast default validation contract
-npm test
+# Run the full Node test suite
+pnpm test
 
-# Run the full validation surface
-npm run test:all
+# Package for Chrome Web Store
+pnpm run ext:package
+# -> produces dist/opensin-bridge-extension.zip
 
-# Run a single issue regression suite
-npm run test:issue -- --issue=27
-
-# Run the pull-request verification contract
-npm run verify:pr
-
-# Create an isolated issue worktree
-npm run issue:worktree -- --issue 26 --branch feat/worktree-pr-isolation-ops
-
-# Verify that a PR only contains issue-scoped files
-npm run verify:issue-scope -- --issue 26 --branch feat/worktree-pr-isolation-ops --base origin/main --allow README.md --allow docs/ --allow scripts/ --allow package.json
-
-# Build for production
-bun run build
-
-# Run the deterministic primitive regression suite
-bun run test:deterministic
-
-# Deploy server to Cloudflare
-bun run deploy:server
-
-# Package extension for Chrome Web Store
-npm run ext:package
-
-# Create an isolated issue worktree
-npm run issue:worktree -- --issue 26 --branch feat/worktree-pr-isolation-ops
-
-# Verify that a PR only contains issue-scoped files
-npm run verify:issue-scope -- --issue 26 --branch feat/worktree-pr-isolation-ops --base origin/main --allow README.md --allow docs/ --allow scripts/ --allow package.json
-
-# Run the workflow regression tests for worktree and PR isolation
-npm run test:issue-worktree
+# Deploy the server to Cloudflare
+pnpm run deploy:server
 ```
 
-## Issue-Scoped Cloud Execution
+### Verifying stealth against public detectors
 
-Cloud executors must not implement features from a dirty default checkout. OpenSIN-Bridge now standardizes issue work in dedicated worktrees under `/Users/jeremy/dev/clean-worktrees/` with an explicit PR isolation gate.
+Follow the procedure in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+The short version:
+
+1. Build and install the extension.
+2. Open `https://bot.sannysoft.com`.
+3. Paste `test/stealth/sannysoft-probe.js` into DevTools and
+   confirm every check reports `PASS`.
+4. Open `https://abrahamjuliot.github.io/creepjs/` and record the
+   trust score in the results table in `docs/BENCHMARKS.md`.
+
+## Issue-scoped cloud execution
+
+Cloud executors must not implement features from a dirty default
+checkout. All issue work happens in dedicated worktrees:
 
 - Workflow: [`docs/ISSUE_SCOPED_EXECUTION.md`](docs/ISSUE_SCOPED_EXECUTION.md)
 - Review checklist: [`docs/PR_ISOLATION_CHECKLIST.md`](docs/PR_ISOLATION_CHECKLIST.md)
-- Worktree helper: `npm run issue:worktree -- --issue <n> --branch <branch>`
-- Scope gate: `npm run verify:issue-scope -- ...`
-- Regression tests: `npm run test:issue-worktree`
+- Worktree helper: `pnpm run issue:worktree -- --issue <n> --branch <branch>`
+- Scope gate: `pnpm run verify:issue-scope -- ...`
+- Regression tests: `pnpm run test:issue-worktree`
+
+## Behavior timeline capture
+
+For issue set #17 / #21 / #24 the bridge ships a core behavior-
+timeline capture layer:
+
+- **Durable storage**: session events are written into an IndexedDB-
+  backed event store in the MV3 service worker.
+- **Content-side capture**: the MAIN-world injector emits compact
+  events for clicks, debounced inputs, form submits, and navigation
+  markers.
+- **Performance controls**: click throttling, input debouncing,
+  short-window navigation dedupe, buffered flushes, bounded
+  IndexedDB batch sizes.
+- **Bridge markers**: `start_recording`, `snapshot`, and `observe`
+  append marker events into the same session timeline when behavior
+  recording is enabled.
 
 ## License
 
-**PROPRIETARY** - All rights reserved. This software is NOT open source.
-The server-side code is trade secret material and must NEVER be published publicly.
-
----
-
-*OpenSIN-AI - Autonomous AI Agent Ecosystem*
-
-
-## Behavior Timeline Capture
-
-OpenSIN-Bridge now includes a core behavior-timeline capture layer for issue set #17 / #21 / #24.
-
-- **Durable storage:** session events are written into an IndexedDB-backed event store in the MV3 service worker.
-- **Content-side capture:** the MAIN-world injector emits compact events for clicks, debounced inputs, form submits, and navigation markers.
-- **Performance controls:** click throttling, input debouncing, short-window navigation dedupe, buffered flushes, and bounded IndexedDB batch sizes keep capture lightweight.
-- **Bridge markers:** `start_recording`, `snapshot`, and `observe` now append marker events into the same session timeline when behavior recording is enabled.
-
-### Verification
-
-```bash
-npm test
-npm run build
-```
+Proprietary. All rights reserved. The server-side business logic is
+trade-secret material and is not published publicly. The extension
+source in this repository is auditable by customers under NDA on
+request.
