@@ -89,6 +89,9 @@ survey panels, ticketing).
   "Competitors who clone get NOTHING") removed. Replaced with an honest
   positioning section (**What Bridge does / does not do**, **Trade-offs vs
   Playwright and CDP-in-extension alternatives**) and verifiable claims only.
+- Manifest permissions are now explicit: `proxy` and `declarativeNetRequest`
+  are required for the stealth / debug runtime, while `webRequest`,
+  `contextMenus`, and `management` remain optional.
 
 ### Evasion coverage (new in v2)
 
@@ -163,9 +166,9 @@ architecture built for fully-unattended agent use.
   the correct `icons/icon128.png` filename.
 - Popup icon loads: the `/icons/…` absolute URL was replaced with a relative
   `../../icons/…` path so the Chrome extension popup renders its icon.
-- Permissions are now minimal: `webRequest`, `tabCapture`, `contextMenus`,
-  `declarativeNetRequest`, `management`, `proxy` moved to
-  `optional_permissions` (none of them were actually used in 4.x code paths).
+- Permissions are now scoped: `webRequest`, `contextMenus`, and `management`
+  remain optional, while `proxy` and `declarativeNetRequest` are required for
+  the stealth / debug runtime.
 - No hard-coded secrets: the leaked Groq API key that shipped in the 4.x
   service worker has been removed. All vision keys are now user-supplied via
   the options UI.

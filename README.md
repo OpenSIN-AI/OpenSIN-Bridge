@@ -146,7 +146,7 @@ by internal test harnesses. See
 ```
 OpenSIN-Bridge/
 |-- extension/                   Chrome MV3 extension
-|   |-- manifest.json
+|   |-- manifest.json            # MV3 manifest (strict CSP; proxy + DNR required for stealth v2)
 |   |-- icons/
 |   `-- src/
 |       |-- background/service-worker.js

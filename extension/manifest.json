@@ -65,11 +65,13 @@
     "downloads",
     "tabGroups",
     "clipboardRead",
-    "clipboardWrite"
+    "clipboardWrite",
+    "proxy",
+    "declarativeNetRequest"
   ],
 
   "host_permissions": ["<all_urls>"],
-  "optional_permissions": ["proxy", "management", "contextMenus", "declarativeNetRequest", "webRequest"],
+  "optional_permissions": ["management", "contextMenus", "webRequest"],
 
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https: wss: ws:; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:;"
