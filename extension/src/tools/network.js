@@ -124,6 +124,49 @@ export function register(router) {
     }
   })
 
+  router.register("net.block", async ({ tabId, urlPatterns = [] } = {}) => {
+    const id = await Tabs.resolveTabId(tabId)
+    invariant(Array.isArray(urlPatterns), "urlPatterns must be an array", "INVALID_ARGS")
+    await CDP.attach(id)
+    await CDP.send(id, "Network.enable", {})
+    await CDP.send(id, "Network.setBlockedURLs", { urls: urlPatterns.filter(Boolean).map(String) })
+    return { ok: true, blocked: urlPatterns.length }
+  })
+
+  router.register("net.setUserAgent", async ({ tabId, userAgent, acceptLanguage, platform } = {}) => {
+    const id = await Tabs.resolveTabId(tabId)
+    invariant(typeof userAgent === "string" && userAgent, "userAgent required", "INVALID_ARGS")
+    await CDP.attach(id)
+    await CDP.send(id, "Network.setUserAgentOverride", {
+      userAgent,
+      acceptLanguage: acceptLanguage || undefined,
+      platform: platform || undefined,
+    })
+    return { ok: true }
+  })
+
+  router.register("net.setExtraHeaders", async ({ tabId, headers = {} } = {}) => {
+    const id = await Tabs.resolveTabId(tabId)
+    invariant(headers && typeof headers === "object", "headers object required", "INVALID_ARGS")
+    await CDP.attach(id)
+    await CDP.send(id, "Network.enable", {})
+    await CDP.send(id, "Network.setExtraHTTPHeaders", { headers })
+    return { ok: true }
+  })
+
+  router.register("net.throttle", async ({ tabId, latencyMs = 0, downloadKbps, uploadKbps, offline = false } = {}) => {
+    const id = await Tabs.resolveTabId(tabId)
+    await CDP.attach(id)
+    await CDP.send(id, "Network.enable", {})
+    await CDP.send(id, "Network.emulateNetworkConditions", {
+      offline: !!offline,
+      latency: Number(latencyMs) || 0,
+      downloadThroughput: downloadKbps ? (downloadKbps * 1024) / 8 : -1,
+      uploadThroughput: uploadKbps ? (uploadKbps * 1024) / 8 : -1,
+    })
+    return { ok: true }
+  })
+
   router.register("net.fetch", async ({ url, method = "GET", headers, body, mode = "same-origin", credentials = "include", timeoutMs = 30_000 } = {}) => {
     invariant(url, "url required", "INVALID_ARGS")
     const ac = new AbortController()

@@ -41,13 +41,19 @@ export function register(router) {
 
   router.register(
     "system.notify",
-    async ({ title = "OpenSIN Bridge", message = "", iconUrl = "icons/icon-128.png", type = "basic" } = {}) => {
-      return new Promise((resolve) => {
-        chrome.notifications.create(
-          "",
-          { type, iconUrl, title, message },
-          (id) => resolve({ id }),
-        )
+    async ({ title = "OpenSIN Bridge", message = "", iconUrl, type = "basic" } = {}) => {
+      // chrome.notifications needs an absolute URL. Default to the packaged
+      // 128px icon (filename must match manifest.json -> icons).
+      const resolved = iconUrl || chrome.runtime.getURL("icons/icon128.png")
+      return new Promise((resolve, reject) => {
+        try {
+          chrome.notifications.create("", { type, iconUrl: resolved, title, message }, (id) => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message))
+            else resolve({ id })
+          })
+        } catch (e) {
+          reject(e)
+        }
       })
     },
   )

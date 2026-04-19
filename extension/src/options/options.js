@@ -42,8 +42,10 @@ async function load() {
   $('#heartbeatMs').value = cfg.ws?.heartbeatMs ?? DEFAULTS.heartbeatMs;
   $('#backoffMaxMs').value = cfg.ws?.backoffMaxMs ?? DEFAULTS.backoffMaxMs;
   $('#externallyAllowed').value = (cfg.externallyAllowed || DEFAULTS.externallyAllowed).join('\n');
-  $('#visionProvider').value = vk.provider || DEFAULTS.visionProvider;
-  $('#visionKey').value = vk.key || DEFAULTS.visionKey;
+  // visionKeys shape:  { provider, gemini, groq, openai }
+  const provider = vk.provider || DEFAULTS.visionProvider;
+  $('#visionProvider').value = provider;
+  $('#visionKey').value = vk[provider] || vk.key || DEFAULTS.visionKey;
 }
 
 async function save(event) {
@@ -61,10 +63,13 @@ async function save(event) {
     },
     externallyAllowed: parseList($('#externallyAllowed').value),
   };
-  const vision = {
-    provider: $('#visionProvider').value,
-    key: $('#visionKey').value.trim(),
-  };
+  // Merge with the stored shape so multiple provider keys can coexist and
+  // runVision() (state.getVisionKeys) can read keys[providerName] directly.
+  const existing = (await chrome.storage.local.get(VISION_KEYS_KEY))[VISION_KEYS_KEY] || {};
+  const provider = $('#visionProvider').value;
+  const key = $('#visionKey').value.trim();
+  const vision = { ...existing, provider };
+  if (key) vision[provider] = key;
 
   await chrome.storage.local.set({
     [CONFIG_KEY]: cfg,

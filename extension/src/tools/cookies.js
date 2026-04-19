@@ -40,4 +40,22 @@ export function register(router) {
     const stores = await chrome.cookies.getAllCookieStores()
     return { stores }
   })
+
+  router.register("cookies.clearForDomain", async ({ domain, storeId } = {}) => {
+    invariant(typeof domain === "string" && domain, "domain required", "INVALID_ARGS")
+    const filter = { domain }
+    if (storeId) filter.storeId = storeId
+    const all = await chrome.cookies.getAll(filter)
+    let removed = 0
+    for (const c of all) {
+      const url = `${c.secure ? "https" : "http"}://${c.domain.replace(/^\./, "")}${c.path || "/"}`
+      try {
+        await chrome.cookies.remove({ url, name: c.name, storeId: c.storeId })
+        removed++
+      } catch {
+        // Ignore — cookie might already be gone or pinned by the browser.
+      }
+    }
+    return { removed, total: all.length }
+  })
 }
