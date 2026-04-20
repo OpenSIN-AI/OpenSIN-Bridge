@@ -1,21 +1,33 @@
 /**
- * tools/stealth.js — environment coherence assessment + challenge detection.
+ * ================================================================================
+ * DATEI: stealth.js
+ * PROJEKT: OpenSIN-Bridge - Stealth Status & Challenge Detection
+ * ZWECK: Erkennt Bot-Erkennungsversuche und bewertet die Tarnqualität
  *
- * Implements the bridge-side counterpart of worker issue #74:
+ * WICHTIG FÜR ENTWICKLER:
+ * Diese Datei ist das FRÜHWARNSYSTEM gegen Bot-Erkennung! Sie erkennt BEVOR
+ * eine Blockade stattfindet, ob die Seite Misstrauen schöpft.
  *
- *   - `stealth.status`        — what the stealth subsystem currently does
- *   - `stealth.assess`        — score the environment coherence (locale,
- *                               timezone, viewport, fingerprint, automation
- *                               markers) and return a measurable scorecard
- *                               instead of a yes/no claim
- *   - `stealth.detectChallenge` — observable detection signals for Cloudflare,
- *                               Turnstile, reCAPTCHA, hCaptcha, DataDome,
- *                               PerimeterX, etc.
+ * WAS PASSIERT HIER:
+ * 1. stealth.status - Aktueller Status des Stealth-Subsystems
+ * 2. stealth.assess - Bewertet die Umgebung (Locale, Timezone, Fingerprint)
+ *    - Gibt einen SCORE zurück (nicht nur ja/nein!)
+ *    - Score hilft dem Agenten zu entscheiden ob Neustart nötig ist
+ * 3. stealth.detectChallenge - Erkennt CAPTCHAs und Challenges
+ *    - Cloudflare Turnstile, reCAPTCHA, hCaptcha, DataDome, PerimeterX
  *
- * Implementation note: the assessment runs in the page context via
- * `dom.evaluate`. It returns deterministic, comparable scores so the
- * worker can tracks challenge rate, bounce rate, and forced relogin rate
- * across runs.
+ * WARUM SCORE STATT BOOLEAN?
+ * - Ein Score von 0.85 bedeutet "leicht verdächtig, aber noch okay"
+ * - Ein Score von 0.40 bedeutet "sofortiger Neustart erforderlich"
+ * - Boolean wäre zu grob und würde zu viele false positives produzieren
+ *
+ * ANTI-BOT RELEVANZ:
+ * - Erkennt navigator.webdriver BEFORE es zur Blockade kommt
+ * - Prüft auf Inkonsistenzen (Timezone vs Locale vs IP)
+ * - Überwacht Viewport-Anomalien (Bot-typische Fenstergrößen)
+ *
+ * ACHTUNG: Diese Datei läuft im Page Context! Keine Extension APIs verwenden!
+ * ================================================================================
  */
 
 import * as Tabs from "../drivers/tabs.js"
