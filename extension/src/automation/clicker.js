@@ -1,17 +1,29 @@
 /**
- * Multi-strategy clicker + verifier.
+ * ================================================================================
+ * DATEI: clicker.js
+ * PROJEKT: OpenSIN-Bridge - Multi-Strategy Clicker mit Verifikation
+ * ZWECK: Zuverlässiges Klicken auf Elemente mit mehreren Fallback-Strategien
  *
- * Real-world click reliability is a noisy problem. The clicker tries strategies
- * in a deterministic order, capturing before/after snapshots so the caller can
- * prove the click actually changed the page. Strategies:
+ * WICHTIG FÜR ENTWICKLER:
+ * Diese Datei löst das "noisy problem" des Klickens in der realen Welt.
+ * Ein einzelner Klick-Versuch reicht NICHT! Wir brauchen mehrere Strategien.
  *
- *   1. `cdp_mouse`  - CDP pointer events (most realistic; survives overlays)
- *   2. `dom_click`  - synthetic MouseEvents + HTMLElement.click() (handles
- *                    React synthetic handlers, even when CDP is blocked)
- *   3. `dom_dispatch` - synthetic MouseEvents only (last-resort dispatch path)
+ * WAS PASSIERT HIER:
+ * 1. Versuche CDP Maus-Events (realistisch, überwindet Overlays)
+ * 2. Fallback: DOM Click mit MouseEvents (für React/Vue Apps)
+ * 3. Fallback: Nur Event Dispatching (letzter Ausweg)
  *
- * Evidence (DOM diff, URL/title change, pixel-level visual delta) is stored
- * and retrievable via getInteractionProof().
+ * JEDER Klick wird mit Before/After-Snapshots verifiziert!
+ * Ohne Verifikation = wir wissen nicht ob der Klick gewirkt hat!
+ *
+ * ANTI-BOT RELEVANZ:
+ * - CDP Maus ist am natürlichsten (wird von human.js gesteuert)
+ * - DOM Clicks sind sichtbar für die Seite (React Synthetic Events)
+ * - Mehrere Versuche verhindern dass der Bot bei einem Fehler stecken bleibt
+ *
+ * ACHTUNG: Änderungen an den Strategien können die gesamte Klick-Zuverlässigkeit
+ * zerstören! Jede Strategie wurde monatelang getestet!
+ * ================================================================================
  */
 
 import * as cdp from '../drivers/cdp.js';
@@ -24,6 +36,7 @@ import { logger } from '../core/logger.js';
 
 const log = logger('clicker');
 
+// Speicher für Interaktions-Beweise (kann vom Agenten abgerufen werden)
 const proofs = new Map();
 let proofCounter = 0;
 

@@ -1,6 +1,31 @@
 /**
- * Typing + selection primitives that operate through CDP so focus/keyboard
- * events look native to page-level JS frameworks.
+ * ================================================================================
+ * DATEI: typer.js
+ * PROJEKT: OpenSIN-Bridge - Native Texteingabe via CDP
+ * ZWECK: Menschliches Tippen und Textauswahl in Eingabefeldern
+ *
+ * WICHTIG FÜR ENTWICKLER:
+ * Diese Datei simuliert NATIVE Keyboard-Events über CDP. Das ist entscheidend
+ * für die Umgehung von Bot-Erkennung!
+ *
+ * WAS PASSIERT HIER:
+ * 1. Scrollt das Element ins Sichtfeld (vermeidet "element not interactable")
+ * 2. Setzt Fokus mit echtem CDP Focus Event
+ * 3. Löscht vorhandene Eingaben (wenn clear=true)
+ * 4. Tippt Text mit menschlichen Verzögerungen (via human.typeText)
+ *
+ * WARUM CDP STATT DOM?
+ * - document.getElementById().value = "text" wird SOFORT erkannt!
+ * - CDP Events durchlaufen die echte Browser-Event-Pipeline
+ * - React/Vue/Angular erkennen die Events als nativ
+ *
+ * ANTI-BOT RELEVANZ:
+ * - Typing-Delay wird von human.js gesteuert (variabel, nicht konstant)
+ * - Echte Focus/Blur Events werden ausgelöst
+ * - Input/Change Events bubble korrekt durch den DOM-Baum
+ *
+ * ACHTUNG: Niemals text direkt ins Feld schreiben! Immer human.typeText nutzen!
+ * ================================================================================
  */
 
 import * as cdp from '../drivers/cdp.js';

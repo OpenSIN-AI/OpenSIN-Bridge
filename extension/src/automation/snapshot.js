@@ -1,10 +1,32 @@
 /**
- * Accessibility-tree snapshots that give agents a deterministic reference map.
+ * ================================================================================
+ * DATEI: snapshot.js
+ * PROJEKT: OpenSIN-Bridge - Accessibility Tree Snapshot System
+ * ZWECK: Erstellt deterministische Referenzkarten für Agenten
  *
- * Every interactive node gets a stable "@e<N>" handle that later tool calls
- * (click_ref, type_ref, hover_ref) can point at without reasoning about fragile
- * CSS selectors. Handles live in-memory per tab; a fresh snapshot clears the
- * map so an old handle cannot accidentally target a re-rendered element.
+ * WICHTIG FÜR ENTWICKLER:
+ * Diese Datei ist das RÜCKGRAT der Element-Identifikation! Ohne sie können
+ * Agenten keine Elemente zuverlässig anklicken oder beschreiben.
+ *
+ * WAS PASSIERT HIER:
+ * 1. Liest den Accessibility Tree von Chrome (barrierefreie Struktur)
+ * 2. Weist jedem interaktiven Element eine stabile "@e<N>" Referenz zu
+ * 3. Diese Referenzen bleiben auch bei React/Vue Re-renders stabil
+ * 4. Alte Handles werden automatisch ungültig bei neuem Snapshot
+ *
+ * WARUM NICHT CSS SELECTORS?
+ * - CSS Selectors brechen bei dynamischen Apps sofort (Klassen ändern sich)
+ * - XPath ist zu langsam und fragil
+ * - Accessibility Tree ist SEMANTISCH und STABIL
+ *
+ * ANTI-BOT RELEVANZ:
+ * - Schnelle Element-Lokalisierung ohne wiederholtes DOM-Scanning
+ * - Vermeidet verdächtige "document.querySelectorAll" Aufrufe
+ * - Nutzt native Chrome APIs (unauffällig)
+ *
+ * ACHTUNG: Änderungen an der Ref-Generierung brechen ALLE bestehenden Agenten!
+ * Das Format "@e<N>" MUSS konsistent bleiben!
+ * ================================================================================
  */
 
 import * as cdp from '../drivers/cdp.js';
@@ -15,6 +37,8 @@ import { logger } from '../core/logger.js';
 
 const log = logger('snapshot');
 
+// Globale Map aller aktiven Referenzen: "@e1" -> {tabId, backendDOMNodeId, ...}
+// WICHTIG: Wird bei jedem Tab-Snapshot zurückgesetzt!
 const refs = new Map();
 let refCounter = 0;
 let lastSnapshot = null;
