@@ -213,6 +213,18 @@ export const METHODS = Object.freeze([
 
   // ----- dom (read-only is idempotent, mutating is NOT) ---------------------
   m("dom.snapshot", true, false, "Accessibility snapshot of the page.", { mode: "?string", maxNodes: "?number" }, { snapshot: "object" }, [ERROR_CODES.TARGET_GONE]),
+  m("dom.resolve", true, false,
+    "Resolve one or more candidate elements by role + accessible name + ancestor hints. Returns ranked matches with stable refs and ambiguity flag.",
+    { role: "?string", name: "?string", nameMatch: "?string", ancestor: "?object", testId: "?string", attributes: "?object", visibleOnly: "?boolean", limit: "?number" },
+    { matches: "array", ambiguous: "boolean" },
+    [ERROR_CODES.TARGET_GONE, ERROR_CODES.ELEMENT_NOT_FOUND],
+  ),
+  m("dom.waitForSelector", true, false,
+    "Wait until a selector matches in the given state (attached|visible|hidden|detached). Idempotent polling.",
+    { selector: "string", state: "?string", timeoutMs: "?number" },
+    { ok: "boolean" },
+    [ERROR_CODES.TIMEOUT, ERROR_CODES.TARGET_GONE],
+  ),
   m("dom.fullSnapshot", true, false, "Full observation snapshot with screenshot.", { maxNodes: "?number" }, { snapshot: "object" }, [ERROR_CODES.TARGET_GONE, ERROR_CODES.CDP_FAILED]),
   m("dom.click", false, true, "Click a referenced or selected element.", { selector: "?string", ref: "?string" }, { ok: "boolean", proofId: "?string" }, [ERROR_CODES.ELEMENT_NOT_FOUND, ERROR_CODES.ELEMENT_NOT_ACTIONABLE, ERROR_CODES.POSTCONDITION_FAILED, ERROR_CODES.DUPLICATE_ACTION]),
   m("dom.type", false, true, "Type text into an element.", { selector: "?string", ref: "?string", text: "string" }, { ok: "boolean" }, [ERROR_CODES.ELEMENT_NOT_FOUND, ERROR_CODES.ELEMENT_NOT_ACTIONABLE]),
