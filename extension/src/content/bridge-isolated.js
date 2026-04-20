@@ -257,40 +257,125 @@
   }
 
   // ---- Input synthesis ------------------------------------------------------
+  // Track the last synthetic pointer position so consecutive actions share a
+  // plausible mouse trajectory instead of teleporting across the viewport.
+  let __lastPointer = { x: Math.floor(window.innerWidth / 2), y: Math.floor(window.innerHeight / 2) }
+
+  function gaussian(mean, stddev) {
+    // Box-Muller. Clamped so we never return negative delays.
+    const u1 = 1 - Math.random()
+    const u2 = 1 - Math.random()
+    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)
+    return Math.max(0, mean + stddev * z)
+  }
+
+  // Quadratic Bezier with a single random control point offset perpendicular
+  // to the start->end vector. Produces a curved, non-linear trajectory that
+  // does not look like a straight-line snap.
+  function* bezierPath(x0, y0, x1, y1, steps) {
+    const dx = x1 - x0
+    const dy = y1 - y0
+    const dist = Math.hypot(dx, dy) || 1
+    const nx = -dy / dist
+    const ny = dx / dist
+    const jitter = Math.min(dist * 0.25, 140) * (Math.random() - 0.5) * 2
+    const cx = (x0 + x1) / 2 + nx * jitter
+    const cy = (y0 + y1) / 2 + ny * jitter
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps
+      const it = 1 - t
+      yield {
+        x: it * it * x0 + 2 * it * t * cx + t * t * x1,
+        y: it * it * y0 + 2 * it * t * cy + t * t * y1,
+      }
+    }
+  }
+
+  async function moveMouse(fromX, fromY, toX, toY, { human = true } = {}) {
+    const dist = Math.hypot(toX - fromX, toY - fromY)
+    const steps = Math.max(6, Math.min(32, Math.round(dist / 28)))
+    if (!human) {
+      window.dispatchEvent(new MouseEvent("mousemove", { clientX: toX, clientY: toY, bubbles: true }))
+      __lastPointer = { x: toX, y: toY }
+      return
+    }
+    for (const pt of bezierPath(fromX, fromY, toX, toY, steps)) {
+      const ev = {
+        clientX: pt.x,
+        clientY: pt.y,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+      }
+      const target = document.elementFromPoint(pt.x, pt.y) || document.documentElement
+      target.dispatchEvent(new PointerEvent("pointermove", { ...ev, pointerType: "mouse" }))
+      target.dispatchEvent(new MouseEvent("mousemove", ev))
+      await sleep(gaussian(12, 5))
+    }
+    __lastPointer = { x: toX, y: toY }
+  }
+
   async function humanClick(el, opts = {}) {
     el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" })
-    await sleep(30)
+    await sleep(gaussian(80, 30))
     const rect = el.getBoundingClientRect()
-    const x = rect.left + rect.width / 2
-    const y = rect.top + rect.height / 2
+    // Pick a point slightly off-centre inside the target -- real users do not
+    // hit geometric centres.
+    const pad = 6
+    const minX = rect.left + Math.min(pad, rect.width / 4)
+    const maxX = rect.right - Math.min(pad, rect.width / 4)
+    const minY = rect.top + Math.min(pad, rect.height / 4)
+    const maxY = rect.bottom - Math.min(pad, rect.height / 4)
+    const x = minX + Math.random() * Math.max(1, maxX - minX)
+    const y = minY + Math.random() * Math.max(1, maxY - minY)
+
+    if (opts.human !== false) {
+      await moveMouse(__lastPointer.x, __lastPointer.y, x, y, { human: true })
+    } else {
+      __lastPointer = { x, y }
+    }
+
     const init = {
       bubbles: true,
       cancelable: true,
       composed: true,
       clientX: x,
       clientY: y,
+      screenX: x,
+      screenY: y,
       button: opts.button === "right" ? 2 : opts.button === "middle" ? 1 : 0,
       buttons: 1,
       view: window,
     }
-    el.dispatchEvent(new PointerEvent("pointerover", init))
+    el.dispatchEvent(new PointerEvent("pointerover", { ...init, pointerType: "mouse" }))
     el.dispatchEvent(new MouseEvent("mouseover", init))
-    el.dispatchEvent(new PointerEvent("pointerdown", { ...init, pointerType: "mouse" }))
+    await sleep(gaussian(40, 15))
+    el.dispatchEvent(new PointerEvent("pointerdown", { ...init, pointerType: "mouse", isPrimary: true }))
     el.dispatchEvent(new MouseEvent("mousedown", init))
-    if (opts.human !== false) await sleep(20 + Math.random() * 40)
+    if (opts.human !== false) await sleep(gaussian(70, 25))
     el.dispatchEvent(new PointerEvent("pointerup", { ...init, pointerType: "mouse" }))
     el.dispatchEvent(new MouseEvent("mouseup", init))
     for (let i = 0; i < (opts.clickCount || 1); i++) {
       el.dispatchEvent(new MouseEvent("click", init))
-      if (i < (opts.clickCount || 1) - 1) await sleep(60)
+      if (i < (opts.clickCount || 1) - 1) await sleep(gaussian(120, 30))
     }
     if (typeof el.focus === "function") el.focus()
   }
 
-  async function humanType(el, text, { delayMs, replace = false, pressEnter = false } = {}) {
+  async function humanType(
+    el,
+    text,
+    { delayMs, replace = false, pressEnter = false, typoRate = 0, human = true } = {},
+  ) {
     if (!el) throw err("type target not found", "NOT_FOUND")
     if (!(el instanceof HTMLElement)) throw err("type target not editable", "NOT_EDITABLE")
-    el.focus()
+    if (typeof el.focus === "function") el.focus()
+    if (document.activeElement !== el) {
+      // Recover if the site stole focus; otherwise keypresses go to body.
+      el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" })
+      el.focus()
+    }
     if (replace) {
       if ("value" in el) {
         setNativeValue(el, "")
@@ -299,22 +384,68 @@
         el.textContent = ""
       }
     }
-    for (const ch of text) {
-      const down = new KeyboardEvent("keydown", { key: ch, bubbles: true })
-      el.dispatchEvent(down)
+
+    // Inter-keystroke timing model: base mean 95ms stddev 40ms, short burst
+    // after whitespace, occasional long pauses ("thinking").
+    const baseMean = typeof delayMs === "number" ? delayMs : 95
+    const stddev = Math.max(10, baseMean * 0.35)
+
+    function pushKey(ch) {
+      const code = ch.length === 1 ? `Key${ch.toUpperCase()}` : ch
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: ch, code, bubbles: true }))
       if ("value" in el) {
         setNativeValue(el, (el.value || "") + ch)
         el.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: ch, bubbles: true }))
       } else if (el.isContentEditable) {
         document.execCommand?.("insertText", false, ch)
       }
-      el.dispatchEvent(new KeyboardEvent("keyup", { key: ch, bubbles: true }))
-      if (delayMs) await sleep(delayMs + Math.random() * 25)
+      el.dispatchEvent(new KeyboardEvent("keyup", { key: ch, code, bubbles: true }))
+    }
+
+    function popChar() {
+      if ("value" in el) {
+        const v = el.value || ""
+        setNativeValue(el, v.slice(0, -1))
+        el.dispatchEvent(new InputEvent("input", { inputType: "deleteContentBackward", bubbles: true }))
+      } else if (el.isContentEditable) {
+        document.execCommand?.("delete")
+      }
+    }
+
+    const neighbours = {
+      a: "sq",
+      e: "wr",
+      i: "uo",
+      o: "ip",
+      s: "ad",
+      t: "ry",
+      n: "bm",
+      l: "k",
+      r: "et",
+    }
+
+    for (const ch of text) {
+      // Simulate an occasional typo + correction when humanisation is on.
+      if (human && typoRate > 0 && /[a-z]/i.test(ch) && Math.random() < typoRate) {
+        const nb = neighbours[ch.toLowerCase()]
+        if (nb) {
+          const wrong = nb[Math.floor(Math.random() * nb.length)]
+          pushKey(ch === ch.toUpperCase() ? wrong.toUpperCase() : wrong)
+          await sleep(gaussian(baseMean * 1.4, stddev))
+          popChar()
+          await sleep(gaussian(baseMean * 0.8, stddev))
+        }
+      }
+      pushKey(ch)
+      let wait = human ? gaussian(baseMean, stddev) : baseMean
+      if (ch === " ") wait *= 0.7
+      if (human && Math.random() < 0.04) wait += gaussian(450, 180) // thinking pause
+      await sleep(wait)
     }
     el.dispatchEvent(new Event("change", { bubbles: true }))
     if (pressEnter) {
-      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
-      el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }))
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }))
+      el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }))
       if (el.form && typeof el.form.requestSubmit === "function") el.form.requestSubmit()
     }
   }
@@ -358,6 +489,124 @@
     },
     async "dom.fullSnapshot"(args) {
       return buildSnapshot({ ...args, mode: "full" })
+    },
+    async "dom.resolve"({
+      role,
+      name,
+      nameMatch = "contains",
+      ancestor,
+      testId,
+      attributes,
+      visibleOnly = true,
+      limit = 5,
+    } = {}) {
+      // Candidate gathering: start from a cheap CSS filter when possible,
+      // then score each candidate by how many hints it matches.
+      const candidates = new Set()
+      if (testId) {
+        for (const attr of ["data-testid", "data-test", "data-qa"]) {
+          for (const el of document.querySelectorAll(`[${attr}="${cssEscapeAttr(testId)}"]`)) {
+            candidates.add(el)
+          }
+        }
+      }
+      if (role) {
+        const tags = roleToTags(role)
+        const byRole = document.querySelectorAll(`[role="${cssEscapeAttr(role)}"]`)
+        byRole.forEach((el) => candidates.add(el))
+        tags.forEach((t) => document.querySelectorAll(t).forEach((el) => candidates.add(el)))
+      }
+      if (!candidates.size) {
+        document.querySelectorAll("a,button,input,textarea,select,[role],[tabindex]").forEach((el) => candidates.add(el))
+      }
+
+      const needle = (name || "").toLowerCase().trim()
+      function matchName(el) {
+        if (!needle) return 0.5
+        const n = accessibleName(el).toLowerCase()
+        if (!n) return 0
+        if (nameMatch === "exact") return n === needle ? 1 : 0
+        if (nameMatch === "startsWith") return n.startsWith(needle) ? 0.9 : 0
+        if (nameMatch === "regex") {
+          try {
+            return new RegExp(name, "i").test(n) ? 0.85 : 0
+          } catch {
+            return 0
+          }
+        }
+        return n.includes(needle) ? 0.7 + (n === needle ? 0.3 : 0) : 0
+      }
+
+      function matchAncestor(el) {
+        if (!ancestor) return 0.5
+        let node = el.parentElement
+        let hops = 0
+        while (node && hops < 12) {
+          const r = node.getAttribute?.("role") || implicitRole(node)
+          const n = accessibleName(node).toLowerCase()
+          if (ancestor.role && r === ancestor.role) return 0.9
+          if (ancestor.name && n.includes(String(ancestor.name).toLowerCase())) return 0.85
+          if (ancestor.selector && node.matches?.(ancestor.selector)) return 0.95
+          node = node.parentElement
+          hops += 1
+        }
+        return 0
+      }
+
+      function matchAttributes(el) {
+        if (!attributes) return 0.5
+        let score = 0
+        let total = 0
+        for (const [k, v] of Object.entries(attributes)) {
+          total += 1
+          if (el.getAttribute(k) === v) score += 1
+        }
+        return total ? score / total : 0.5
+      }
+
+      const scored = []
+      for (const el of candidates) {
+        if (visibleOnly && !isVisible(el)) continue
+        const effectiveRole = el.getAttribute("role") || implicitRole(el)
+        const roleScore = !role ? 0.5 : effectiveRole === role ? 1 : 0
+        if (role && roleScore === 0) continue
+        const nameScore = matchName(el)
+        if (name && nameScore === 0) continue
+        const score =
+          roleScore * 0.35 +
+          nameScore * 0.35 +
+          matchAncestor(el) * 0.15 +
+          matchAttributes(el) * 0.1 +
+          (isVisible(el) ? 0.05 : 0)
+        scored.push({ el, score })
+      }
+
+      scored.sort((a, b) => b.score - a.score)
+      const top = scored.slice(0, limit).map(({ el, score }) => {
+        const rect = el.getBoundingClientRect()
+        return {
+          ref: mintRef(el),
+          score: Number(score.toFixed(3)),
+          role: el.getAttribute("role") || implicitRole(el),
+          name: accessibleName(el).slice(0, 160),
+          tag: el.tagName.toLowerCase(),
+          selector: stableSelector(el),
+          rect: {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            w: Math.round(rect.width),
+            h: Math.round(rect.height),
+          },
+          visible: isVisible(el),
+          disabled: !!el.disabled,
+          inViewport:
+            rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth,
+        }
+      })
+      return {
+        matches: top,
+        ambiguous: top.length > 1 && top[0].score - (top[1]?.score ?? 0) < 0.08,
+      }
     },
     async "dom.waitForSelector"({ selector, state = "visible", timeoutMs = 10_000 }) {
       const start = Date.now()

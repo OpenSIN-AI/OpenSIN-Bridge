@@ -41,6 +41,22 @@ export function register(router) {
   )
 
   router.register(
+    "dom.resolve",
+    forward("dom.resolve", (args) => {
+      const { role, name, nameMatch, ancestor, testId, attributes, visibleOnly, limit } = args
+      return { role, name, nameMatch, ancestor, testId, attributes, visibleOnly, limit }
+    }),
+  )
+
+  router.register(
+    "dom.waitForSelector",
+    forward("dom.waitForSelector", ({ selector, state = "visible", timeoutMs = 10_000 } = {}) => {
+      invariant(typeof selector === "string" && selector, "selector required", "INVALID_ARGS")
+      return { selector, state, timeoutMs }
+    }),
+  )
+
+  router.register(
     "dom.click",
     forward("dom.click", (args) => {
       invariant(args.selector || args.ref, "selector or ref required", "INVALID_ARGS")

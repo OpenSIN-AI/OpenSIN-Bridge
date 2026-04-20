@@ -8,6 +8,7 @@
 import { invariant } from "../core/errors.js"
 import * as Tabs from "../drivers/tabs.js"
 import { sendToTab } from "../drivers/tabs.js"
+import * as Lifecycle from "../drivers/session-lifecycle.js"
 
 async function captureTabStorage(tabId) {
   try {
@@ -86,4 +87,73 @@ export function register(router) {
     }
     return { ok: true }
   })
+
+  // -------- session lifecycle (issue #71) ----------------------------------
+
+  router.register(
+    "session.manifest",
+    async ({ origin, tabId, ttlSeconds, source = "runtime", note } = {}) => {
+      invariant(typeof origin === "string" && origin.trim(), "origin required", "INVALID_ARGS")
+      const manifest = await Lifecycle.buildManifest({ origin, tabId, ttlSeconds, source, note })
+      return { manifest }
+    },
+    {
+      description: "Build or refresh a session manifest with TTL, origin scope, and last-known-good tracking.",
+      category: "session",
+    },
+  )
+
+  router.register(
+    "session.invalidate",
+    async ({ origin, reason } = {}) => {
+      invariant(typeof origin === "string" && origin.trim(), "origin required", "INVALID_ARGS")
+      invariant(typeof reason === "string" && reason.trim(), "reason required", "INVALID_ARGS")
+      return Lifecycle.invalidate({ origin, reason })
+    },
+    {
+      description: "Mark the active session manifest invalid with classified reason.",
+      category: "session",
+    },
+  )
+
+  router.register(
+    "session.lastKnownGood",
+    async ({ origin } = {}) => {
+      invariant(typeof origin === "string" && origin.trim(), "origin required", "INVALID_ARGS")
+      const lkg = await Lifecycle.lastKnownGood({ origin })
+      return { manifest: lkg }
+    },
+    {
+      description: "Return the most recent known-good session snapshot for an origin.",
+      category: "session",
+    },
+  )
+
+  router.register(
+    "session.health",
+    async ({ origin } = {}) => {
+      invariant(typeof origin === "string" && origin.trim(), "origin required", "INVALID_ARGS")
+      const result = await Lifecycle.health({ origin })
+      return { health: result }
+    },
+    {
+      description: "Probe the active session manifest and return active/stale/invalid status.",
+      category: "session",
+    },
+  )
+
+  router.register(
+    "session.list",
+    async () => ({ manifests: await Lifecycle.listManifests() }),
+    { description: "List session manifests, sorted newest first.", category: "session" },
+  )
+
+  router.register(
+    "session.drop",
+    async ({ origin } = {}) => {
+      invariant(typeof origin === "string" && origin.trim(), "origin required", "INVALID_ARGS")
+      return Lifecycle.dropManifest({ origin })
+    },
+    { description: "Drop a session manifest entirely.", category: "session" },
+  )
 }

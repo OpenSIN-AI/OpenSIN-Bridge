@@ -182,6 +182,17 @@ export function register(router) {
   alias("stop_recording", "behavior.stop")
   alias("recording_status", "behavior.status")
 
+  // --- Bridge meta (contract, evidence, stealth) — issues #69, #70, #74 ----
+  alias("bridge_contract", "bridge.contract")
+  alias("bridge_evidence_bundle", "bridge.evidenceBundle", (p) => ({ tabId: p.tabId, traceId: p.traceId, includeScreenshot: p.includeScreenshot }))
+  alias("bridge_traces", "bridge.traces", (p) => ({ traceId: p.traceId, limit: p.limit ?? 50 }))
+  alias("session_manifest", "session.manifest", (p) => ({ origin: p.origin, tabId: p.tabId, ttlSeconds: p.ttlSeconds, source: p.source, note: p.note }))
+  alias("session_invalidate", "session.invalidate", (p) => ({ origin: p.origin, reason: p.reason }))
+  alias("session_last_known_good", "session.lastKnownGood", (p) => ({ origin: p.origin }))
+  alias("session_health", "session.health", (p) => ({ origin: p.origin }))
+  alias("stealth_assess", "stealth.assess", (p) => ({ tabId: p.tabId }))
+  alias("stealth_detect_challenge", "stealth.detectChallenge", (p) => ({ tabId: p.tabId }))
+
   // --- Misc convenience -----------------------------------------------------
   alias("list_iframes", "dom.evaluate", (p) => ({
     tabId: p.tabId,

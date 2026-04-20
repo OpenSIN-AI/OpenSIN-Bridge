@@ -121,6 +121,25 @@ const TOOL_DEFINITIONS = [
   { name: 'rotate_cookies', description: 'Export and delete all cookies for domain' },
   { name: 'set_proxy', description: 'Set HTTP/S proxy for browser' },
   { name: 'clear_proxy', description: 'Clear proxy settings' },
+  // ----- Bridge contract v1 surface (worker issue #69) ---------------------
+  { name: 'bridge.contract', description: 'Return the active OpenSIN-Bridge contract (schema, errors, idempotency, retry hints)' },
+  { name: 'bridge.contract.method', description: 'Return contract metadata for a single method' },
+  { name: 'bridge.contract.translate', description: 'Translate an internal BridgeError code to its public contract code' },
+  { name: 'bridge.contract.idempotent', description: 'Report whether a contract method is safe to retry' },
+  { name: 'bridge.contract.version', description: 'Return the current contract version + revision' },
+  // ----- Observability / evidence (worker issue #70) -----------------------
+  { name: 'bridge.evidenceBundle', description: 'Assemble a forensic evidence bundle (snapshot, screenshot, network, behavior, command history)' },
+  { name: 'bridge.traces', description: 'Return recent RPC dispatches, optionally filtered by trace ID' },
+  // ----- Session lifecycle (worker issue #71) ------------------------------
+  { name: 'session.manifest', description: 'Build or refresh a session manifest with TTL, origin scope, last-known-good tracking' },
+  { name: 'session.invalidate', description: 'Mark the active session manifest invalid with classified reason' },
+  { name: 'session.lastKnownGood', description: 'Return the most recent known-good session snapshot for an origin' },
+  { name: 'session.health', description: 'Probe the active session manifest and return active/stale/invalid status' },
+  { name: 'session.list', description: 'List session manifests, sorted newest first' },
+  { name: 'session.drop', description: 'Drop a session manifest entirely' },
+  // ----- Stealth assessment (worker issue #74) -----------------------------
+  { name: 'stealth.assess', description: 'Score environment coherence (locale, timezone, viewport, automation markers)' },
+  { name: 'stealth.detectChallenge', description: 'Detect anti-bot challenges (Cloudflare, Turnstile, reCAPTCHA, hCaptcha, DataDome, ...)' },
 ];
 
 class BridgeRpcError extends Error {
