@@ -1,252 +1,596 @@
-# OpenSIN Bridge
+# 🌉 OpenSIN Bridge
 
-A Chrome Manifest V3 extension that turns the user's real Chrome
-profile into a scriptable browser for AI agents. The extension
-exposes a JSON-RPC tool surface (92 tools over three transports —
-WebSocket, Native Messaging, and `externally_connectable`); the
-business logic lives on a Cloudflare Workers API.
+> **Die ultimative Brücke zwischen AI-Agenten und echtem Chrome**  
+> 🔒 Session-bound Automation | 🎭 Unsichtbar für Bot-Detektoren | ⚡ 92 RPC Tools
 
-The bridge is designed for workflows that need the session state of
-a real human (cookies, passwords, Autofill, Fingerprint) — paid
-research panels, CRM automation, any platform that blocks
-Playwright/Puppeteer on sight. It is **not** a hermetic testing
-tool; for that, Playwright remains a better choice.
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/OpenSIN-AI/OpenSIN-Bridge/releases)
+[![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
+[![Stealth](https://img.shields.io/badge/stealth-v2_success-green.svg)](docs/BENCHMARKS.md)
+[![Tools](https://img.shields.io/badge/tools-92-orange.svg)](#agent-tool-surface)
 
-## Architecture
+---
+
+## 📋 Inhaltsverzeichnis
+
+- [Was ist OpenSIN Bridge?](#-was-ist-opensin-bridge)
+- [Warum Bridge statt Playwright?](#-warum-bridge-statt-playwright)
+- [Architektur](#-architektur)
+- [Installation](#-installation)
+- [Schnellstart](#-schnellstart)
+- [Tool-Referenz](#-tool-referenz)
+- [Stealth Layer v2](#-stealth-layer-v2)
+- [Entwicklung](#-entwicklung)
+- [Testing & Benchmarks](#-testing--benchmarks)
+- [Integration mit OpenSIN Stealth Browser](#-integration-mit-opensin-stealth-browser)
+- [Wichtige Hinweise für Entwickler](#-wichtige-hinweise-für-entwickler)
+
+---
+
+## 🚀 Was ist OpenSIN Bridge?
+
+**OpenSIN Bridge** ist eine Chrome Manifest V3 Extension, die den echten Chrome-Browser eines Benutzers in einen scriptfähigen Browser für AI-Agenten verwandelt.
+
+### 🔑 Kernmerkmale
+
+| Feature | Beschreibung |
+|---------|-------------|
+| **Echte Sessions** | Nutzt echte Cookies, Passwörter, Autofill und Fingerprints |
+| **92 RPC Tools** | Vollständige Kontrolle über Tabs, DOM, Cookies, Network und mehr |
+| **Stealth v2** | 17-Evasion-Module neutralisieren Bot-Erkennung |
+| **Multi-Transport** | WebSocket, Native Messaging, extern_connectable |
+| **Session-Bound** | Perfekt für Plattformen, die Playwright/Puppeteer blockieren |
+
+### 💡 Anwendungsfälle
+
+- ✅ Bezahlte Umfrage-Plattformen (Session-Erhaltung)
+- ✅ CRM-Automatisierung mit echten Logins
+- ✅ E-Commerce Preis-Monitoring mit Account-Zugang
+- ✅ Social Media Management mit echten Profilen
+- ✅ Jede Plattform, die Headless-Browser erkennt und blockiert
+
+---
+
+## ⚔️ Warum Bridge statt Playwright?
+
+Die meisten Agent-Browser starten ein frisches Chromium ohne Profil. Das ist perfekt für Tests, aber katastrophal für Seiten, die auf echte User-Sessions prüfen.
+
+### Vergleichstabelle
+
+| Dimension | Playwright/Puppeteer | **OpenSIN Bridge** |
+|-----------|---------------------|-------------------|
+| **Chrome Instanz** | Gespawnetes Chromium | **Echtes installiertes Chrome** |
+| **Profil/Cookies/2FA** | Leer, synthetisch | **Echt, vor-authentifiziert** |
+| **navigator.webdriver** | `true` (leckt!) | **`undefined` (v2 Stealth)** |
+| **Headful** | Optional | **Standard — User sieht alles** |
+| **Fingerprint** | Generisch | **Individuell wie echter User** |
+| **Use Case** | Testing, Scraping | **Session-bound Automation** |
+
+> **💡 WICHTIG FÜR ENTWICKLER:**  
+> Diese Extension ist NICHT für hermetic testing gedacht. Dafür bleibt Playwright die bessere Wahl. Bridge ist spezialisiert auf Szenarien, wo Session-State (Cookies, Logins, History) überlebenswichtig ist.
+
+---
+
+## 🏗️ Architektur
 
 ```
-+----------------------------+       JSON-RPC / WebSocket        +----------------------------+
-|  Chrome MV3 Extension      | <--------------------------------> |  Cloudflare Workers API    |
-|  (runs in user's Chrome)   |             JWT                    |                            |
-|                            |                                    |  - Session validation       |
-|  - 92 RPC tools            |                                    |  - Rate limiting            |
-|  - Accessibility-tree      |                                    |  - Usage tracking           |
-|    snapshots               |                                    |  - Stripe subscription gate |
-|  - Multi-strategy clicker  |                                    |                            |
-|    (CDP -> DOM -> dispatch)|                                    +----------------------------+
-|  - Stealth layer v2        |                                                |
-|  - Offscreen document for  |                                                v
-|    clipboard / audio       |                                    +----------------------------+
-|  - Native messaging host   |                                    |  Supabase + Stripe          |
-+----------------------------+                                    |  Auth / subs / usage log    |
-                                                                  +----------------------------+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    OPEN SIN BRIDGE ARCHITEKTUR                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌──────────────────────┐         JSON-RPC / JWT        ┌─────────────┐│
+│  │  Chrome MV3          │ <---------------------------> │  Cloudflare ││
+│  │  Extension           │                               │  Workers    ││
+│  │                      │                               │  API        ││
+│  │  • 92 RPC Tools      │                               │             ││
+│  │  • Accessibility-Tree│                               │  • Auth     ││
+│  │  • Multi-Strategy    │                               │  • Rate Lim ││
+│  │    Clicker (CDP→DOM) │                               │  • Tracking ││
+│  │  • Stealth Layer v2  │                               │  • Stripe   ││
+│  │  • Offscreen Doc     │                               └──────┬──────┘│
+│  │  • Native Messaging  │                                        │      │
+│  └──────────┬───────────┘                                        │      │
+│             │                                                    │      │
+│             │ WebSocket / Native                                 │      │
+│             ▼                                                    ▼      │
+│  ┌──────────────────────┐                              ┌─────────────┐│
+│  │  Real User Chrome    │                              │  Supabase   ││
+│  │  (Echtes Profil)     │                              │  + Stripe   ││
+│  │                      │                              │             ││
+│  │  • Echte Cookies     │                              │  • DB       ││
+│  │  • Echte Sessions    │                              │  • Subs     ││
+│  │  • Echter Fingerprint│                              │  • Usage    ││
+│  └──────────────────────┘                              └─────────────┘│
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Why this over Playwright / Stagehand / Skyvern
+### Datenfluss (Schritt-für-Schritt)
 
-Most agent browsers spawn a fresh Chromium with no profile. That is
-perfect for deterministic tests and terrible for sites that gate
-access on a real-user session. Bridge flips the default:
+1. **AI Agent** sendet JSON-RPC Request (z.B. `{"method": "dom.click", "params": {...}}`)
+2. **Cloudflare Worker** validiert JWT, prüft Rate-Limits, loggt Usage
+3. **WebSocket/Native Messaging** transportiert zum Chrome Extension
+4. **Extension Background** routet zur richtigen Tool-Implementierung
+5. **Content Script** führt Aktion im MAIN-World Kontext aus (mit Stealth v2)
+6. **Ergebnis** wird zurückgemeldet mit Proof (Screenshot-Delta, DOM-Hash)
 
-| Dimension                | Playwright-based tools | OpenSIN Bridge |
-|--------------------------|------------------------|----------------|
-| Chrome instance          | Spawned Chromium        | User's installed Chrome |
-| Profile / cookies / 2FA  | Empty, synthetic        | Real, pre-authenticated |
-| `navigator.webdriver`    | `true` (leaks)          | `undefined` (v2 stealth) |
-| Chrome debugger banner   | Not applicable          | Yes (CDP attach)        |
-| Headful                  | Optional                | Default — user watches  |
-| Primary use case         | Testing, scraping       | Session-bound automation |
+> **⚠️ ACHTUNG ENTWICKLER:**  
+> Ändere NIEMALS die Reihenfolge der Stealth-Module in `stealth-main.js`. Die Idempotenz und Try-Catch-Wrap ist kritisch für die Stabilität. Jeder Fehler hier macht die gesamte Extension erkennbar!
 
-The stealth layer is deliberately single-purpose: it is not trying
-to be a universal anti-detection framework. It neutralizes the
-primitives that `chrome.debugger.attach` disturbs and a handful of
-well-known headless-chrome fingerprints — see
-[`docs/stealth-v2.md`](docs/stealth-v2.md) for the exact surface.
+---
 
-## Agent tool surface
+## 🛠️ Installation
 
-All 92 tools are served from a single namespaced router. The wire
-format is a plain JSON-RPC envelope:
+### Voraussetzungen
 
-```jsonc
-{
-  "type": "tool_request",
-  "id": 42,
-  "method": "dom.click",
-  "params": { "selector": "button[type=submit]" }
-}
+- Node.js >= 18.x
+- pnpm >= 8.x (`npm install -g pnpm`)
+- Chrome >= 116 (Manifest V3 Support)
+- Cloudflare Account (für Server-Deployment)
+- Supabase Project (für Auth/DB)
+
+### Schritt-für-Schritt
+
+```bash
+# 1. Repository klonen
+git clone https://github.com/OpenSIN-AI/OpenSIN-Bridge.git
+cd OpenSIN-Bridge
+
+# 2. Dependencies installieren
+pnpm install
+
+# 3. Environment Variables setzen
+cp .env.example .env
+# Bearbeite .env mit deinen Keys (SUPABASE_URL, SUPABASE_KEY, STRIPE_SECRET)
+
+# 4. Extension im Dev-Modus laden
+pnpm run ext:dev
+# → Öffne chrome://extensions
+# → Aktiviere "Developer Mode"
+# → Klicke "Load unpacked" und wähle ./extension
+
+# 5. Server deployen (optional für Cloud-Nutzung)
+pnpm run deploy:server
+
+# 6. Tests ausführen
+pnpm test
 ```
 
-Namespaces:
+### Native Messaging Host installieren (für lokale Kommunikation)
 
-- `tabs.*`     — list, create, close, activate, group, move, duplicate
-- `nav.*`      — goto, back, forward, reload, waitForLoad
-- `dom.*`      — click, type, fill, select, scroll, hover, evaluate,
-                 getText, getHtml, query, waitForSelector, snapshot
-- `cookies.*`  — get, set, delete, getAll, stores, clearForDomain
-- `storage.*`  — local / session / indexedDB read+write, extension
-                 storage
-- `net.*`      — fetch, captureStart / Stop, setExtraHeaders,
-                 setUserAgent, block, throttle
-- `session.*`  — export / import cookies + storage for domain reuse
-- `system.*`   — health, uptime, notify, downloads, clipboard, version
-- `vision.*`   — locate (model-based element locate), read (OCR)
-- `behavior.*` — recording start / stop / export for session replay
+```bash
+cd native-host
+chmod +x install_host.sh
+./install_host.sh
+```
 
-Flat aliases (`click`, `navigate`, `get_page_content`, `tabs_list`,
-...) are mapped to their dotted equivalents in
-`extension/src/tools/aliases.js`, so existing agent harnesses keep
-working.
+> **📝 HINWEIS:** Der Native Messaging Host ermöglicht die Kommunikation zwischen lokalen Python-Skripten und der Chrome Extension ohne WebSocket. Perfekt für lokale Agenten!
 
-## Clicker model
+---
 
-The clicker runs a three-stage fallback for every click:
+## 🚀 Schnellstart
 
-1. **CDP mouse input** — dispatches real `mousemove`,
-   `mousedown`, `mouseup` events through
-   `Input.dispatchMouseEvent`. This is indistinguishable from a
-   human click from the page's perspective.
-2. **DOM click()** — calls `element.click()` if the CDP path is
-   blocked (certain `iframe` sandbox configurations).
-3. **DOM dispatch** — synthesizes `MouseEvent` and dispatches it
-   directly. Final fallback.
+### Beispiel: Login auf einer Website automatisieren
 
-Every click is followed by an interaction proof: a DOM-diff hash
-and an optional screenshot delta. The tool call does not return
-`ok: true` unless the page actually reacted to the click — the
-agent gets honest feedback instead of a false positive.
+```javascript
+// Beispiel: Python Agent mit WebSocket
+import asyncio
+import websockets
+import json
 
-## Snapshot model
+async def login_agent():
+    uri = "ws://localhost:8787"  # Lokaler Server oder Cloudflare URL
+    async with websockets.connect(uri) as ws:
+        # 1. Navigiere zur Login-Seite
+        await ws.send(json.dumps({
+            "type": "tool_request",
+            "id": 1,
+            "method": "nav.goto",
+            "params": {"url": "https://example.com/login"}
+        }))
+        response = await ws.recv()
+        print("Navigation:", response)
+        
+        # 2. Fülle Email-Feld aus
+        await ws.send(json.dumps({
+            "type": "tool_request",
+            "id": 2,
+            "method": "dom.type",
+            "params": {
+                "selector": "input[type='email']",
+                "text": "user@example.com"
+            }
+        }))
+        
+        # 3. Fülle Passwort-Feld aus
+        await ws.send(json.dumps({
+            "type": "tool_request",
+            "id": 3,
+            "method": "dom.type",
+            "params": {
+                "selector": "input[type='password']",
+                "text": "geheim123"
+            }
+        }))
+        
+        # 4. Klicke Login-Button (mit menschlicher Maus!)
+        await ws.send(json.dumps({
+            "type": "tool_request",
+            "id": 4,
+            "method": "dom.click",
+            "params": {"selector": "button[type='submit']"}
+        }))
+        
+        # 5. Warte auf Erfolg
+        await asyncio.sleep(2)
+        print("✅ Login abgeschlossen!")
 
-Snapshots come from Chrome's Accessibility tree (via CDP's
-`Accessibility.getFullAXTree`). Every interactive node gets a
-stable in-memory handle (`@e1`, `@e2`, ...) that later tool calls
-can reference without reasoning about CSS selectors. A fresh
-snapshot clears the map so an old handle cannot target a rerendered
-element.
+asyncio.run(login_agent())
+```
 
-The tree is compacted before returning — structural roles with no
-name are dropped, skip roles (`generic`, `group` without name) are
-collapsed. Median tree size on a modern web app is around 4 KB
-compared to 200 KB+ for a raw DOM dump.
+### Beispiel: Snapshot der Seite holen (Accessibility Tree)
 
-## Stealth layer v2
+```python
+# Holt einen kompakten Snapshot der aktuellen Seite
+response = await ws.send(json.dumps({
+    "type": "tool_request",
+    "id": 5,
+    "method": "dom.snapshot",
+    "params": {}
+}))
+# Antwort enthält kompakte AX-Tree mit Handles (@e1, @e2, ...)
+# Viel kleiner als voller DOM (ca. 4KB vs 200KB+)
+```
 
-Runs as a MAIN-world content script at `document_start` on every
-frame. 17 evasion modules cover:
+---
 
-- `navigator.webdriver`, `plugins`, `mimeTypes`, `languages`,
-  `hardwareConcurrency`, `deviceMemory`, `permissions.query`,
-  `userAgent`, `mediaDevices`, `getBattery`, `connection`
-- `window.chrome.runtime`, `outerWidth`, `outerHeight`
-- `HTMLIFrameElement.contentWindow`
-- WebGL `getParameter` (vendor + renderer spoof)
-- Canvas `toDataURL` / `getImageData` (micro-noise)
-- AudioContext `getChannelData` (micro-noise)
-- `Function.prototype.toString` (Proxy-preserved native signature)
+## 🧰 Tool-Referenz
 
-Every module is idempotent, try/catch-wrapped, and its status is
-introspectable via `window.__opensin_stealth_status__()` for use
-by internal test harnesses. See
-[`docs/stealth-v2.md`](docs/stealth-v2.md) and
-[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+Alle 92 Tools sind über JSON-RPC verfügbar. Hier die wichtigsten Kategorien:
 
-## Repository layout
+### Tabs-Management
+
+| Tool | Beschreibung | Beispiel |
+|------|-------------|----------|
+| `tabs.list` | Liste alle offenen Tabs | `{"method": "tabs.list"}` |
+| `tabs.create` | Erstelle neuen Tab | `{"method": "tabs.create", "params": {"url": "..."}}` |
+| `tabs.close` | Schließe Tab | `{"method": "tabs.close", "params": {"tabId": 123}}` |
+| `tabs.activate` | Aktiviere Tab | `{"method": "tabs.activate", "params": {"tabId": 123}}` |
+
+### Navigation
+
+| Tool | Beschreibung | Beispiel |
+|------|-------------|----------|
+| `nav.goto` | Navigiere zu URL | `{"method": "nav.goto", "params": {"url": "..."}}` |
+| `nav.back` | Zurück | `{"method": "nav.back"}` |
+| `nav.reload` | Neu laden | `{"method": "nav.reload"}` |
+| `nav.waitForLoad` | Warte auf Load-Event | `{"method": "nav.waitForLoad"}` |
+
+### DOM-Interaktion (HERZSTÜCK!)
+
+| Tool | Beschreibung | Besonderheit |
+|------|-------------|--------------|
+| `dom.click` | Klicke Element | **3-Stage Fallback:** CDP → DOM.click() → MouseEvent |
+| `dom.type` | Tippe Text | Mit menschlichen Verzögerungen |
+| `dom.fill` | Fülle Formular | Smart Field Detection |
+| `dom.hover` | Hover über Element | Für Dropdown-Menüs |
+| `dom.scroll` | Scrolle Seite | Pixel-genau |
+| `dom.snapshot` | Hole AX-Tree | Kompakt, mit Handles |
+| `dom.evaluate` | JS ausführen | Im Page-Kontext |
+
+> **💡 WICHTIG:** Der `dom.click` verwendet eine intelligente 3-Stufen-Strategie:
+> 1. **CDP Mouse Input** (echte Mausbewegung via Chrome Debugger Protocol)
+> 2. **DOM click()** (Fallback wenn CDP blockiert ist)
+> 3. **MouseEvent Dispatch** (letzter Ausweg)
+> 
+> Jeder Klick wird verifiziert durch DOM-Diff-Hash und optional Screenshot-Delta.
+> **Kein false positive!** Wenn die Seite nicht reagiert, bekommst du ehrliches Feedback.
+
+### Cookies & Storage
+
+| Tool | Beschreibung |
+|------|-------------|
+| `cookies.get` | Hole Cookies für Domain |
+| `cookies.set` | Setze Cookie |
+| `cookies.getAll` | Alle Cookies |
+| `storage.local.get` | LocalStorage lesen |
+| `storage.session.set` | SessionStorage schreiben |
+
+### Network
+
+| Tool | Beschreibung |
+|------|-------------|
+| `net.fetch` | HTTP Request ausführen |
+| `net.setUserAgent` | User-Agent ändern |
+| `net.block` | Ressourcen blocken (Ads, Tracker) |
+| `net.captureStart` | Network-Traffic mitschneiden |
+
+### Vision (OCR & Element-Lokalisierung)
+
+| Tool | Beschreibung |
+|------|-------------|
+| `vision.locate` | Finde Element per Bilderkennung |
+| `vision.read` | OCR Texterkennung |
+
+### Behavior Recording
+
+| Tool | Beschreibung |
+|------|-------------|
+| `behavior.start` | Starte Aufnahme |
+| `behavior.stop` | Stoppe Aufnahme |
+| `behavior.export` | Exportiere Timeline |
+
+---
+
+## 🎭 Stealth Layer v2
+
+Das Herzstück der Unsichtbarkeit. 17 Evasion-Module laufen als MAIN-World Content Script bei `document_start`.
+
+### Abgedeckte Fingerprints
+
+| Kategorie | Module | Status |
+|-----------|--------|--------|
+| **Navigator** | `webdriver`, `plugins`, `mimeTypes`, `languages` | ✅ |
+| **Hardware** | `hardwareConcurrency`, `deviceMemory` | ✅ |
+| **Permissions** | `permissions.query` | ✅ |
+| **Media** | `mediaDevices`, `getBattery`, `connection` | ✅ |
+| **Chrome Runtime** | `window.chrome.runtime` | ✅ |
+| **Window Size** | `outerWidth`, `outerHeight` | ✅ |
+| **iFrames** | `HTMLIFrameElement.contentWindow` | ✅ |
+| **WebGL** | `getParameter` (Vendor/Renderer Spoof) | ✅ |
+| **Canvas** | `toDataURL`, `getImageData` (Micro-Noise) | ✅ |
+| **AudioContext** | `getChannelData` (Micro-Noise) | ✅ |
+| **Function.toString** | Proxy-preserved native signature | ✅ |
+
+### So funktioniert's
+
+Jedes Modul ist:
+- **Idempotent:** Kann mehrfach ausgeführt werden ohne Seiteneffekte
+- **Try-Catch-gewrappt:** Ein Fehler stoppt nicht den gesamten Stealth
+- **Introspektierbar:** `window.__opensin_stealth_status__()` gibt Status zurück
+
+### Testing gegen Bot-Detektoren
+
+```bash
+# 1. Extension bauen und laden
+pnpm run ext:dev
+
+# 2. Test-Seite öffnen
+# Gehe zu: https://bot.sannysoft.com
+
+# 3. Probe-Script in DevTools Console einfügen
+# Datei: test/stealth/sannysoft-probe.js
+
+# 4. Alle Checks müssen PASS melden!
+```
+
+> **⚠️ KRITISCH FÜR ENTWICKLER:**  
+> Teste JEDE Änderung an Stealth-Modulen gegen mindestens 3 Detektoren:
+> - https://bot.sannysoft.com
+> - https://abrahamjuliot.github.io/creepjs/
+> - https://pixelscan.net
+> 
+> Dokumentiere Ergebnisse in `docs/BENCHMARKS.md`. Ohne Benchmark-Update kein Merge!
+
+---
+
+## 👨‍💻 Entwicklung
+
+### Projektstruktur
 
 ```
 OpenSIN-Bridge/
-|-- extension/                   Chrome MV3 extension
-|   |-- manifest.json            # MV3 manifest (strict CSP; proxy + DNR required for stealth v2)
-|   |-- icons/
-|   `-- src/
-|       |-- background/service-worker.js
-|       |-- content/
-|       |   |-- bridge-isolated.js      RPC handler (isolated world)
-|       |   |-- stealth-main.js         Stealth v2 (main world)
-|       |   `-- stealth-legacy.js       v1 shim, kept for rollback
-|       |-- core/                       config, logger, errors, rpc,
-|       |                               state, lifecycle, utils
-|       |-- drivers/                    tabs, cdp, offscreen,
-|       |                               behavior-store
-|       |-- automation/                 human, clicker, typer,
-|       |                               snapshot, vision,
-|       |                               vision-locate
-|       |-- tools/                      92 RPC tools + aliases
-|       |-- transports/                 ws, native, external
-|       |-- offscreen/                  clipboard / audio sandbox
-|       |-- popup/ | options/           operator UI
-|       `-- shared/                     deterministic primitives
-|-- server.js                    WebSocket bridge + MCP/HTTP relay
-|-- native-host/                 Native messaging host
-|-- docs/
-|   |-- BENCHMARKS.md            Stealth verification procedure
-|   |-- stealth-v2.md            Stealth architecture & rationale
-|   |-- ISSUE_SCOPED_EXECUTION.md
-|   `-- PR_ISOLATION_CHECKLIST.md
-|-- test/
-|   |-- stealth/                 Stealth v2 Node unit tests
-|   |-- *.test.js | *.test.mjs   Other regression suites
-`-- scripts/                     Build, test, deploy
+├── extension/                 # Chrome MV3 Extension
+│   ├── manifest.json          # ⚠️ ACHTUNG: CSP muss proxy + DNR erlauben!
+│   ├── icons/
+│   └── src/
+│       ├── background/        # Service Worker (Hirn der Extension)
+│       ├── content/           # Content Scripts
+│       │   ├── bridge-isolated.js  # RPC Handler (isolated world)
+│       │   ├── stealth-main.js     # 🎭 Stealth v2 (MAIN world!)
+│       │   └── stealth-legacy.js   # v1 Shim (Rollback)
+│       ├── core/              # Config, Logger, Errors, RPC
+│       ├── drivers/           # Tabs, CDP, Offscreen
+│       ├── automation/        # Human, Clicker, Typer, Snapshot
+│       ├── tools/             # 92 Tool-Implementierungen
+│       ├── transports/        # WebSocket, Native, External
+│       └── shared/            # Deterministische Primitives
+├── native-host/               # Python Native Messaging Host
+├── server.js                  # WebSocket Relay (Cloudflare)
+├── docs/                      # Dokumentation
+├── test/                      # Testsuite
+└── scripts/                   # Build & Deploy
 ```
 
-## Development
+### Wichtige Entwicklungsregeln
+
+1. **NIEMALS** im default Branch arbeiten! Immer Issue-Worktrees nutzen:
+   ```bash
+   pnpm run issue:worktree -- --issue 42 --branch feature/mein-feature
+   ```
+
+2. **IMMER** Tests schreiben bevor Code geändert wird (Test-Driven Development)
+
+3. **IMMER** Benchmarks aktualisieren bei Stealth-Änderungen
+
+4. **NIEMALS** Secrets committen! `.env` steht in `.gitignore`
+
+5. **IMMER** Comments hinzufügen! Andere Entwickler sind oft dumm und kaputtmachen ist leicht.
+
+### Nützliche Commands
 
 ```bash
-# Dependencies
-pnpm install
-
-# Load the extension in a dev Chrome
+# Extension im Dev-Modus laden
 pnpm run ext:dev
-# -> open chrome://extensions, enable Developer Mode, load-unpacked
-#    pointing at ./extension
 
-# Run the stealth unit suite
+# Stealth Unit Tests
 pnpm run test:stealth
 
-# Run the full Node test suite
+# Alle Tests
 pnpm test
 
-# Package for Chrome Web Store
+# Extension packen (für Chrome Web Store)
 pnpm run ext:package
-# -> produces dist/opensin-bridge-extension.zip
 
-# Deploy the server to Cloudflare
+# Server deployen
 pnpm run deploy:server
+
+# Issue-Worktree erstellen
+pnpm run issue:worktree -- --issue <NUMMER>
+
+# Scope-Verification
+pnpm run verify:issue-scope -- <DATEIEN>
 ```
 
-### Verifying stealth against public detectors
+---
 
-Follow the procedure in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
-The short version:
+## 🧪 Testing & Benchmarks
 
-1. Build and install the extension.
-2. Open `https://bot.sannysoft.com`.
-3. Paste `test/stealth/sannysoft-probe.js` into DevTools and
-   confirm every check reports `PASS`.
-4. Open `https://abrahamjuliot.github.io/creepjs/` and record the
-   trust score in the results table in `docs/BENCHMARKS.md`.
+### Test-Suites
 
-## Issue-scoped cloud execution
+| Suite | Beschreibung | Command |
+|-------|-------------|---------|
+| **Stealth v2** | Unit-Tests für Stealth-Module | `pnpm run test:stealth` |
+| **Bridge Contract** | Tool-API-Verifikation | `pnpm run test:contract` |
+| **Behavior Timeline** | Recording/Playback-Tests | `pnpm run test:behavior` |
+| **Native Host** | Python-Host-Integration | `pnpm run test:native` |
+| **Issue Worktree** | Isolationstests | `pnpm run test:issue-worktree` |
 
-Cloud executors must not implement features from a dirty default
-checkout. All issue work happens in dedicated worktrees:
+### Benchmark-Prozedur
 
-- Workflow: [`docs/ISSUE_SCOPED_EXECUTION.md`](docs/ISSUE_SCOPED_EXECUTION.md)
-- Review checklist: [`docs/PR_ISOLATION_CHECKLIST.md`](docs/PR_ISOLATION_CHECKLIST.md)
-- Worktree helper: `pnpm run issue:worktree -- --issue <n> --branch <branch>`
-- Scope gate: `pnpm run verify:issue-scope -- ...`
-- Regression tests: `pnpm run test:issue-worktree`
+Siehe [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) für detaillierte Anleitung.
 
-## Behavior timeline capture
+**Kurzversion:**
 
-For issue set #17 / #21 / #24 the bridge ships a core behavior-
-timeline capture layer:
+1. Extension bauen und installieren
+2. Test-Seiten besuchen (sannysoft, creepjs, pixelscan)
+3. Probe-Scripts in DevTools ausführen
+4. Ergebnisse in `docs/BENCHMARKS.md` dokumentieren
+5. Nur mergen wenn ALLE Tests grün!
 
-- **Durable storage**: session events are written into an IndexedDB-
-  backed event store in the MV3 service worker.
-- **Content-side capture**: the MAIN-world injector emits compact
-  events for clicks, debounced inputs, form submits, and navigation
-  markers.
-- **Performance controls**: click throttling, input debouncing,
-  short-window navigation dedupe, buffered flushes, bounded
-  IndexedDB batch sizes.
-- **Bridge markers**: `start_recording`, `snapshot`, and `observe`
-  append marker events into the same session timeline when behavior
-  recording is enabled.
+---
 
-## License
+## 🔗 Integration mit OpenSIN Stealth Browser
 
-Proprietary. All rights reserved. The server-side business logic is
-trade-secret material and is not published publicly. The extension
-source in this repository is auditable by customers under NDA on
-request.
+OpenSIN Bridge und OpenSIN Stealth Browser teilen sich dieselben Algorithmen für menschliche Interaktionen.
+
+### Gemeinsame Features
+
+| Feature | Bridge (JS) | Stealth Browser (Python) |
+|---------|-------------|-------------------------|
+| **Bezier-Kurven** | ✅ `automation/human.js` | ✅ `input/human_mouse.py` |
+| **Physiologischer Tremor** | ✅ ±0.4px Jitter | ✅ ±0.4px Jitter |
+| **Variable Geschwindigkeit** | ✅ Gauss-Verteilung | ✅ Gauss-Verteilung |
+| **3-Stage Clicker** | ✅ CDP → DOM → Dispatch | ✅ Vision → DOM → JS-Force |
+| **Smart Frame Scan** | ✅ Iframe-Rekursion | ✅ Iframe-Rekursion |
+
+### Code-Beispiel: Gleiche Algorithmen in beiden Sprachen
+
+**JavaScript (Bridge):**
+```javascript
+// extension/src/automation/human.js
+function applyPhysiologicTremor(points) {
+    return points.map((p, i) => {
+        if (i === 0 || i === points.length - 1) return p;
+        return {
+            x: p.x + (Math.random() - 0.5) * 0.8,
+            y: p.y + (Math.random() - 0.5) * 0.8
+        };
+    });
+}
+```
+
+**Python (Stealth Browser):**
+```python
+# input/human_mouse.py
+def _apply_physiologic_tremor(pts):
+    vibrated = []
+    for i, (x, y) in enumerate(pts):
+        if i == 0 or i == len(pts) - 1:
+            vibrated.append((x, y))
+            continue
+        tx = x + random.uniform(-0.4, 0.4)
+        ty = y + random.uniform(-0.4, 0.4)
+        vibrated.append((tx, ty))
+    return vibrated
+```
+
+> **💡 SYNERGIE:** Beide Projekte profitieren voneinander! Verbesserungen an einem Algorithmus sollten immer in BOTH Repositories eingespielt werden. Siehe [`docs/INTEGRATION-STEALTH-BROWSER.md`](docs/INTEGRATION-STEALTH-BROWSER.md).
+
+---
+
+## ⚠️ Wichtige Hinweise für Entwickler
+
+### 🔴 DOs (Unbedingt beachten!)
+
+✅ **IMMER ausführliche Kommentare schreiben**  
+Andere Entwickler verstehen sonst den Code nicht und machen alles kaputt.
+
+✅ **IMMER Issue-Worktrees nutzen**  
+Nie direkt auf `main` committen!  
+```bash
+pnpm run issue:worktree -- --issue 42 --branch feature/xyz
+```
+
+✅ **IMMER Tests vor Änderungen schreiben**  
+Test-Driven Development verhindert Regressionen.
+
+✅ **IMMER Benchmarks bei Stealth-Änderungen updaten**  
+Dokumentiere in `docs/BENCHMARKS.md`.
+
+✅ **IMMER Secrets in `.env` lagern**  
+Nie `.env` committen! Steht in `.gitignore`.
+
+### 🔴 DON'Ts (Auf keinen Fall!)
+
+❌ **NIEMALS Stealth-Modul-Reihenfolge ändern**  
+Die Idempotenz ist kritisch!
+
+❌ **NIEMALS `headless: true` verwenden**  
+Sofortige Erkennung! Bridge braucht zwingend headful.
+
+❌ **NIEMALS CDP-Attach ohne Stealth v2**  
+Der Debugger hinterlässt Fingerabdrücke.
+
+❌ **NIEMALS ohne Tests mergen**  
+Auch kleine Änderungen brechen unerwartet Dinge.
+
+❌ **NIEMALS `.env` committen**  
+GitGuardian scannt automatisch und blockt Commits.
+
+---
+
+## 📄 License
+
+**Proprietary. All rights reserved.**
+
+Der Server-seitige Code ist Trade-Secret-Material und nicht öffentlich zugänglich.  
+Die Extension-Quellen sind für Kunden unter NDA einsehbar.
+
+---
+
+## 🌟 Contributors
+
+Dieses Projekt ist Teil des **OpenSIN AI Ökosystems**:
+
+- **[OpenSIN Overview](https://github.com/OpenSIN-AI/OpenSIN-overview)** – Zentrale Übersicht
+- **[OpenSIN Stealth Browser](https://github.com/OpenSIN-AI/OpenSIN-stealth-browser)** – Python-basierter Stealth-Browser
+- **[Infra-SIN Global Brain](https://github.com/OpenSIN-AI/Infra-SIN-Global-Brain)** – Zentrale AI-Orchestrierung
+
+---
+
+## 📞 Support & Kontakt
+
+- **Issues:** https://github.com/OpenSIN-AI/OpenSIN-Bridge/issues
+- **Discord:** [Link einfügen]
+- **Email:** support@opensin.ai
+
+---
+
+<div align="center">
+
+**Made with ❤️ by the OpenSIN Team**
+
+[![Stars](https://img.shields.io/github/stars/OpenSIN-AI/OpenSIN-Bridge?style=social)](https://github.com/OpenSIN-AI/OpenSIN-Bridge/stargazers)
+[![Forks](https://img.shields.io/github/forks/OpenSIN-AI/OpenSIN-Bridge?style=social)](https://github.com/OpenSIN-AI/OpenSIN-Bridge/network/members)
+
+</div>
