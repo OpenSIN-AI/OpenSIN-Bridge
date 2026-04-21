@@ -51,6 +51,9 @@ happened in the viewport.
 - `docs/stealth-v2.md` and `docs/debug-tracing.md` now spell out the
   manifest/runtime contract: `proxy` + `declarativeNetRequest` are
   required, and `stealth-main.js` must load before `debug-console.js`.
+- Local development defaults now point the extension WebSocket transport
+  at `ws://localhost:7777/extension` so an unpacked bridge can connect to
+  the locally running MCP server without any manual options-page step.
 
 ### Storage
 

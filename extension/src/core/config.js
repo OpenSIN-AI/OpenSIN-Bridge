@@ -33,7 +33,10 @@ export const NATIVE_HOST = Object.freeze({
 
 export const TRANSPORT = Object.freeze({
   websocket: Object.freeze({
-    defaultUrl: 'wss://openjerro-opensin-bridge-mcp.hf.space/extension',
+    // Local-dev default: when the unpacked extension is loaded from this repo,
+    // it should attach to the local bridge server on port 7777 without any
+    // extra UI config. Cloud / HF users can override this in options.
+    defaultUrl: 'ws://localhost:7777/extension',
     reconnectBaseMs: 1000,
     reconnectMaxMs: 30_000,
     reconnectJitter: 0.35,

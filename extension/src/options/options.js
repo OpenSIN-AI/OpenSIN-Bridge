@@ -10,7 +10,10 @@ const CONFIG_KEY = 'openSin.config';
 const VISION_KEYS_KEY = 'openSin.visionKeys';
 
 const DEFAULTS = {
-  wsUrl: 'wss://openjerro-opensin-bridge-mcp.hf.space/extension',
+  // Keep the UI default aligned with the runtime default so the first local
+  // dev install works out of the box. Operators can change this back to the
+  // HF endpoint in the options page if they are not running a local bridge.
+  wsUrl: 'ws://localhost:7777/extension',
   nativeHost: 'ai.opensin.bridge.host',
   autostartWs: true,
   autostartNative: false,

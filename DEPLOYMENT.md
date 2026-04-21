@@ -42,6 +42,21 @@ wrangler secret put OPENAI_API_KEY
 bun run deploy:server
 ```
 
+### Environment matrix
+
+Non-sensitive runtime variables:
+- `PORT`
+- `TOOL_TIMEOUT_MS`
+- `EXTENSION_STALE_MS`
+- `KEEPALIVE_URL`
+
+Secrets (never commit values to git):
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_KEY`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `OPENAI_API_KEY`
+
 ## 3. Chrome Web Store (The Thin Client)
 The extension itself is free to download but useless without a subscription.
 ```bash

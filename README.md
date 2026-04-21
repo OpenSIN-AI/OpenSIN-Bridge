@@ -441,7 +441,29 @@ pnpm run issue:worktree -- --issue <NUMMER>
 pnpm run verify:issue-scope -- <DATEIEN>
 ```
 
----
+Local bridge mode (dev):
+- Start the local MCP server: `PORT=7777 node server.js`
+- Load the unpacked extension from `./extension`
+- The unpacked build defaults to `ws://localhost:7777/extension`
+
+## Runtime environment
+
+Required server env vars:
+- `PORT`
+- `TOOL_TIMEOUT_MS`
+- `EXTENSION_STALE_MS`
+- `KEEPALIVE_URL`
+
+Required Cloudflare/worker secrets:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_KEY`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `OPENAI_API_KEY`
+
+Local bridge notes:
+- `ws://localhost:7777/extension` is the unpacked-extension default
+- public tunneling should use a durable named Cloudflare Tunnel when the URL must stay stable
 
 ## 🧪 Testing & Benchmarks
 
