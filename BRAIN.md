@@ -1,7 +1,27 @@
 # BRAIN.md — OpenSIN Bridge Knowledge Base
 
-> **Stand: 28. April 2026, 21:15 Uhr**
-> Extension v5.0.0, Server v2.9.2
+> **⚠️ DEPRECATED — 28. April 2026, 22:30**
+> Die Bridge-Extension wird NICHT mehr verwendet.
+> Ersetzt durch: **computer-use-mcp** (domdomegg/computer-use-mcp, MIT)
+> Siehe: `/Users/jeremy/dev/A2A-SIN-Worker-heypiggy/BRAIN.md` Section 1
+
+---
+
+## Warum deprecated?
+
+Die Bridge hatte 4 fundamentale Bugs:
+1. Content-Script Crash (`stealth-human-mouse.js` writable:false)
+2. `router(msg)` statt `router.invoke()` (Object vs Function)
+3. Falsches Response-Format (`jsonrpc:2.0` statt `type:tool_response`)
+4. `@ant/computer-use-swift` + `@ant/computer-use-input` — Anthropic-intern, nicht öffentlich
+
+**computer-use-mcp** löst ALLE diese Probleme:
+- Keine Chrome Extension nötig
+- Keine kaputten Transport-Dateien
+- Kein WebSocket-Protokoll
+- Direktes MCP-Protokoll (JSON-RPC über stdin/stdout)
+- native nut.js für Maus/Keyboard/Screenshot
+- MIT-Lizenz, Open Source
 
 ---
 
