@@ -46,27 +46,15 @@ export function create({ router, clientId }) {
       };
 
       ws.onmessage = async (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+        if (!msg.method) return;
+
         try {
-          const msg = JSON.parse(event.data);
-          if (!msg.method) return;
-          log.info("router.invoke", { method: msg.method, id: msg.id });
           const result = await router.invoke(msg.method, msg.params, { via: "ws" });
-          log.info("router.result", { method: msg.method, id: msg.id });
-          ws.send(JSON.stringify({
-            jsonrpc: "2.0",
-            id: msg.id,
-            result
-          }));
-          log.info("ws.sent", { method: msg.method, id: msg.id });
+          ws.send(JSON.stringify({ type: "tool_response", id: msg.id, result }));
         } catch (e) {
-          log.error("Message handling failed", { method: msg?.method, error: e.message, stack: e.stack?.slice(0,200) });
-          try {
-            ws.send(JSON.stringify({
-              jsonrpc: "2.0",
-              id: msg?.id,
-              error: { code: -32603, message: e.message }
-            }));
-          } catch {}
+          ws.send(JSON.stringify({ type: "tool_response", id: msg?.id, error: { code: -32603, message: e.message } }));
         }
       };
 
