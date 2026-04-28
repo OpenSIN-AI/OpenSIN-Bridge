@@ -49,14 +49,17 @@ export function create({ router, clientId }) {
         try {
           const msg = JSON.parse(event.data);
           if (!msg.method) return;
+          log.info("router.invoke", { method: msg.method, id: msg.id });
           const result = await router.invoke(msg.method, msg.params, { via: "ws" });
+          log.info("router.result", { method: msg.method, id: msg.id });
           ws.send(JSON.stringify({
             jsonrpc: "2.0",
             id: msg.id,
             result
           }));
+          log.info("ws.sent", { method: msg.method, id: msg.id });
         } catch (e) {
-          log.error("Message handling failed", e.message);
+          log.error("Message handling failed", { method: msg?.method, error: e.message, stack: e.stack?.slice(0,200) });
           try {
             ws.send(JSON.stringify({
               jsonrpc: "2.0",
