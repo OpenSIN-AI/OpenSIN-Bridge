@@ -59,9 +59,10 @@
   const VERSION = '1.0.0';
   
   if (window[FLAG]) {
-    console.debug('[OpenSIN] Human Mouse bereits geladen, überspringe');
+    console.debug("[OpenSIN] Human Mouse bereits geladen, überspringe");
     return;
   }
+  window[FLAG] = VERSION;
 
   try {
     Object.defineProperty(window, FLAG, {
@@ -298,7 +299,8 @@
   // Öffentliche API für das Window-Objekt
   // ------------------------------------------------------------------
   
-  window.__opensin_humanMouse__ = {
+  Object.defineProperty(window, '__opensin_humanMouse__', {
+    value: {
     version: VERSION,
     config: config,
     
@@ -354,7 +356,7 @@
         config: { ...config }
       };
     }
-  };
+  }, writable: true, configurable: true });
 
   // ------------------------------------------------------------------
   // Integration mit bestehendem Stealth-System
