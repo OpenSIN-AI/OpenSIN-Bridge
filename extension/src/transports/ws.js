@@ -45,12 +45,25 @@ export function create({ router, clientId }) {
         }, 60000);
       };
 
-      ws.onmessage = (event) => {
+      ws.onmessage = async (event) => {
         try {
           const msg = JSON.parse(event.data);
-          router(msg);
+          if (!msg.method) return;
+          const result = await router.invoke(msg.method, msg.params, { via: "ws" });
+          ws.send(JSON.stringify({
+            jsonrpc: "2.0",
+            id: msg.id,
+            result
+          }));
         } catch (e) {
-          log.error("Invalid message", e.message);
+          log.error("Message handling failed", e.message);
+          try {
+            ws.send(JSON.stringify({
+              jsonrpc: "2.0",
+              id: msg?.id,
+              error: { code: -32603, message: e.message }
+            }));
+          } catch {}
         }
       };
 
