@@ -43,44 +43,44 @@
 
 ## Security Model
 
-| Layer | What | Protected? |
-|-------|------|-----------|
-| Extension Source Code | DOM extraction, UI, WebSocket client | NO (client-side, visible) |
+| Layer                 | What                                        | Protected?                              |
+| --------------------- | ------------------------------------------- | --------------------------------------- |
+| Extension Source Code | DOM extraction, UI, WebSocket client        | NO (client-side, visible)               |
 | Server Business Logic | LLM prompts, decision trees, anti-detection | YES (Cloudflare Workers, never exposed) |
-| API Keys / Secrets | OpenAI, Supabase, Stripe keys | YES (server-side env vars only) |
-| License Validation | Subscription check on every API call | YES (server rejects invalid keys) |
-| User Data | Profile answers, study history | YES (encrypted in Supabase) |
+| API Keys / Secrets    | OpenAI, Supabase, Stripe keys               | YES (server-side env vars only)         |
+| License Validation    | Subscription check on every API call        | YES (server rejects invalid keys)       |
+| User Data             | Profile answers, study history              | YES (encrypted in Supabase)             |
 
 ## What a Competitor Gets by Cloning
 
-| They Get | They DON'T Get |
-|----------|---------------|
-| Empty extension shell | Our LLM decision engine |
-| DOM extraction code | Our anti-detection algorithms |
-| WebSocket client | Our persona engine |
-| Login UI | Our Stripe/Supabase backend |
-| popup.html | Our server API (requires valid subscription) |
+| They Get              | They DON'T Get                               |
+| --------------------- | -------------------------------------------- |
+| Empty extension shell | Our LLM decision engine                      |
+| DOM extraction code   | Our anti-detection algorithms                |
+| WebSocket client      | Our persona engine                           |
+| Login UI              | Our Stripe/Supabase backend                  |
+| popup.html            | Our server API (requires valid subscription) |
 
 **Result: A cloned extension is 100% useless without our server.**
 
 ## Pricing
 
-| Plan | Price | Features |
-|------|-------|----------|
-| Free Install | 0 EUR | Extension installs, login screen shows |
-| OpenSIN Pro | 5 EUR/month | Full access to all Bridge features |
+| Plan         | Price        | Features                                   |
+| ------------ | ------------ | ------------------------------------------ |
+| Free Install | 0 EUR        | Extension installs, login screen shows     |
+| OpenSIN Pro  | 5 EUR/month  | Full access to all Bridge features         |
 | OpenSIN Team | 15 EUR/month | 5 seats, priority support, custom personas |
 
 ## Tech Stack
 
-| Component | Technology | Cost |
-|-----------|-----------|------|
-| Extension | Chrome MV3, vanilla JS | FREE |
-| API Gateway | Cloudflare Workers | FREE (100k req/day) |
-| Auth + DB | Supabase | FREE (50k MAU) |
-| Payments | Stripe | 2.9% + 0.30 EUR/tx |
-| LLM Backend | OpenAI via opencode CLI | Variable |
-| Distribution | Chrome Web Store | 5 USD one-time |
+| Component    | Technology              | Cost                |
+| ------------ | ----------------------- | ------------------- |
+| Extension    | Chrome MV3, vanilla JS  | FREE                |
+| API Gateway  | Cloudflare Workers      | FREE (100k req/day) |
+| Auth + DB    | Supabase                | FREE (50k MAU)      |
+| Payments     | Stripe                  | 2.9% + 0.30 EUR/tx  |
+| LLM Backend  | OpenAI via opencode CLI | Variable            |
+| Distribution | Chrome Web Store        | 5 USD one-time      |
 
 ## Repository Structure
 
@@ -150,4 +150,4 @@ The server-side code is trade secret material and must NEVER be published public
 
 ---
 
-*OpenSIN-AI - Autonomous AI Agent Ecosystem*
+_OpenSIN-AI - Autonomous AI Agent Ecosystem_

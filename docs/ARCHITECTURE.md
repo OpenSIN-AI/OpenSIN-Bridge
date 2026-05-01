@@ -15,22 +15,22 @@ The key insight: **Chrome extensions cannot protect source code** (Google forbid
 
 ### What We Protect Against
 
-| Threat | Mitigation |
-|--------|-----------|
-| Competitor clones extension | Extension is worthless without server — they get an empty shell |
-| User reverse-engineers extension | Nothing valuable to find — just DOM scrapers and fetch() calls |
-| Someone builds their own server | They don't know our LLM prompts, decision trees, or anti-detection logic |
-| API abuse / freeloading | Every request requires valid JWT + active Stripe subscription |
-| Credential theft | All secrets are server-side Cloudflare env vars, never in extension |
-| Session hijacking | Short-lived JWTs (15min), refresh tokens in httpOnly cookies |
+| Threat                           | Mitigation                                                               |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| Competitor clones extension      | Extension is worthless without server — they get an empty shell          |
+| User reverse-engineers extension | Nothing valuable to find — just DOM scrapers and fetch() calls           |
+| Someone builds their own server  | They don't know our LLM prompts, decision trees, or anti-detection logic |
+| API abuse / freeloading          | Every request requires valid JWT + active Stripe subscription            |
+| Credential theft                 | All secrets are server-side Cloudflare env vars, never in extension      |
+| Session hijacking                | Short-lived JWTs (15min), refresh tokens in httpOnly cookies             |
 
 ### What We Accept
 
-| Accepted Risk | Reasoning |
-|--------------|-----------|
-| Extension code is readable | By design — it's a thin client with no secrets |
-| DOM extraction logic is copyable | DOM structure is public anyway, no competitive advantage |
-| Someone can see our API endpoints | Endpoints are useless without valid auth + subscription |
+| Accepted Risk                     | Reasoning                                                |
+| --------------------------------- | -------------------------------------------------------- |
+| Extension code is readable        | By design — it's a thin client with no secrets           |
+| DOM extraction logic is copyable  | DOM structure is public anyway, no competitive advantage |
+| Someone can see our API endpoints | Endpoints are useless without valid auth + subscription  |
 
 ## 3. Authentication Flow
 
@@ -118,26 +118,26 @@ Chrome Web Store
 
 ## 6. Revenue Model
 
-| Metric | Target |
-|--------|--------|
-| Price | 5 EUR/month per user |
-| Free tier | None (paywall after login) |
-| Trial | 3-day free trial (no CC required) |
-| Break-even | ~50 paying users (250 EUR/mo covers infra) |
-| Target MRR (6mo) | 500 EUR (100 users) |
-| Target MRR (12mo) | 2,500 EUR (500 users) |
+| Metric            | Target                                     |
+| ----------------- | ------------------------------------------ |
+| Price             | 5 EUR/month per user                       |
+| Free tier         | None (paywall after login)                 |
+| Trial             | 3-day free trial (no CC required)          |
+| Break-even        | ~50 paying users (250 EUR/mo covers infra) |
+| Target MRR (6mo)  | 500 EUR (100 users)                        |
+| Target MRR (12mo) | 2,500 EUR (500 users)                      |
 
 ### Cost Structure
 
-| Item | Monthly Cost |
-|------|-------------|
-| Cloudflare Workers | 0 EUR (free tier) |
-| Supabase | 0 EUR (free tier up to 50k MAU) |
-| Stripe fees | ~2.9% + 0.30 EUR per tx |
-| OpenAI API | ~0.50 EUR per user/month |
-| Chrome Web Store | 5 USD one-time |
-| **Total per user** | **~0.65 EUR** |
-| **Margin per user** | **~4.35 EUR (87%)** |
+| Item                | Monthly Cost                    |
+| ------------------- | ------------------------------- |
+| Cloudflare Workers  | 0 EUR (free tier)               |
+| Supabase            | 0 EUR (free tier up to 50k MAU) |
+| Stripe fees         | ~2.9% + 0.30 EUR per tx         |
+| OpenAI API          | ~0.50 EUR per user/month        |
+| Chrome Web Store    | 5 USD one-time                  |
+| **Total per user**  | **~0.65 EUR**                   |
+| **Margin per user** | **~4.35 EUR (87%)**             |
 
 ## 7. Runtime Self-Healing Observation Loop
 
