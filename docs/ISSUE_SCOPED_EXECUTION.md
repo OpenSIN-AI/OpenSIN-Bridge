@@ -34,11 +34,11 @@ Example:
 
 OpenSIN-Bridge uses this mapping rule:
 
-| Surface | Convention | Purpose |
-|--------|------------|---------|
-| Worktree path | `.../OpenSIN-Bridge-issue-<issue-number>` | Makes the issue lane visible in local and cloud execution logs |
-| Preferred branch name | `<type>/issue-<issue-number>-<slug>` | Keeps the issue number in the git ref itself when the task is starting from scratch |
-| Accepted compatibility branch | User-assigned branch name | Use when the issue already dictates a branch name, but still keep the issue number in the worktree path |
+| Surface                       | Convention                                | Purpose                                                                                                 |
+| ----------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Worktree path                 | `.../OpenSIN-Bridge-issue-<issue-number>` | Makes the issue lane visible in local and cloud execution logs                                          |
+| Preferred branch name         | `<type>/issue-<issue-number>-<slug>`      | Keeps the issue number in the git ref itself when the task is starting from scratch                     |
+| Accepted compatibility branch | User-assigned branch name                 | Use when the issue already dictates a branch name, but still keep the issue number in the worktree path |
 
 Examples:
 
@@ -66,11 +66,11 @@ Before implementation, write down the surfaces that are allowed to change for th
 
 Examples:
 
-| Issue type | Typical allowlist |
-|-----------|-------------------|
-| Docs / process | `README.md`, `docs/`, `scripts/`, `package.json`, `test/` |
-| Extension-only | `extension/`, `README.md`, `docs/`, `package.json`, `test/` |
-| Server-only | `server/`, `README.md`, `docs/`, `package.json`, `test/` |
+| Issue type                | Typical allowlist                                                      |
+| ------------------------- | ---------------------------------------------------------------------- |
+| Docs / process            | `README.md`, `docs/`, `scripts/`, `package.json`, `test/`              |
+| Extension-only            | `extension/`, `README.md`, `docs/`, `package.json`, `test/`            |
+| Server-only               | `server/`, `README.md`, `docs/`, `package.json`, `test/`               |
 | Full-stack bridge feature | `extension/`, `server/`, `README.md`, `docs/`, `package.json`, `test/` |
 
 If the work requires additional surfaces, update the issue comment or implementation notes before continuing. Do not silently widen the scope during execution.
@@ -139,11 +139,11 @@ Use this checklist before opening or updating a PR:
 
 ## Helper scripts
 
-| Command | Purpose |
-|--------|---------|
-| `npm run issue:worktree -- --issue <n> --branch <branch>` | Creates the isolated worktree for one issue |
-| `npm run verify:issue-scope -- ...` | Blocks PRs that drift outside the declared issue scope |
-| `npm run test:issue-worktree` | Regression-tests the worktree helper and PR isolation gate |
+| Command                                                   | Purpose                                                    |
+| --------------------------------------------------------- | ---------------------------------------------------------- |
+| `npm run issue:worktree -- --issue <n> --branch <branch>` | Creates the isolated worktree for one issue                |
+| `npm run verify:issue-scope -- ...`                       | Blocks PRs that drift outside the declared issue scope     |
+| `npm run test:issue-worktree`                             | Regression-tests the worktree helper and PR isolation gate |
 
 ## Recommended operator habit
 

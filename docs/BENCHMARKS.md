@@ -18,7 +18,7 @@ release that touches the stealth layer or any automation primitive.
 **What each row tests**
 
 | Row                  | Stealth module covering it |
-|----------------------|----------------------------|
+| -------------------- | -------------------------- |
 | WebDriver            | `webdriver`                |
 | Chrome (New)         | `chromeRuntime`            |
 | Permissions          | `permissions`              |
@@ -87,8 +87,8 @@ question page without the site flagging the session.
 
 ### Result log
 
-| Date       | Sannysoft | CreepJS trust | heypiggy flow | Stealth version |
-|------------|-----------|---------------|---------------|-----------------|
+| Date       | Sannysoft  | CreepJS trust | heypiggy flow | Stealth version |
+| ---------- | ---------- | ------------- | ------------- | --------------- |
 | 2026-04-19 | 12/12 PASS | pending       | pending       | 2.0.0 (initial) |
 
 Append rows as new results come in — keep the latest row at the top

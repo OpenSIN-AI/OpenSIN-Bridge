@@ -3,7 +3,9 @@
 This guide explains how to push the SaaS architecture to production (Option 3).
 
 ## 1. Supabase Initialization (The Database)
+
 Run the following SQL commands in your Supabase SQL Editor:
+
 ```sql
 -- Subscriptions
 CREATE TABLE subscriptions (
@@ -22,6 +24,7 @@ CREATE POLICY "Read own subscription" ON subscriptions FOR SELECT USING (auth.ui
 ```
 
 ## 2. Cloudflare Workers (The Secret Sauce API)
+
 The LLM and Persona logic lives in Cloudflare Workers. Do not deploy the `extension/` folder here, only `server/`.
 
 ```bash
@@ -45,12 +48,14 @@ bun run deploy:server
 ### Environment matrix
 
 Non-sensitive runtime variables:
+
 - `PORT`
 - `TOOL_TIMEOUT_MS`
 - `EXTENSION_STALE_MS`
 - `KEEPALIVE_URL`
 
 Secrets (never commit values to git):
+
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_KEY`
 - `STRIPE_SECRET_KEY`
@@ -58,9 +63,12 @@ Secrets (never commit values to git):
 - `OPENAI_API_KEY`
 
 ## 3. Chrome Web Store (The Thin Client)
+
 The extension itself is free to download but useless without a subscription.
+
 ```bash
 # Zip the extension
 bun run ext:package
 ```
+
 Upload the resulting `opensin-bridge-extension.zip` to the Chrome Developer Dashboard. Set the price to **Free**, as billing is handled entirely by our Stripe/Supabase backend.

@@ -3,7 +3,7 @@
 ## Unreleased — Debug tracing
 
 New observability tool group so agents (and the humans debugging them)
-can see *what the browser actually did* in response to each bridge
+can see _what the browser actually did_ in response to each bridge
 call. Motivated by the HeyPiggy survey-worker post-mortem (issue #61
 of the Worker repo) where a failing agent produced `dom.click ok`
 three times in a row with no structured signal of why nothing
@@ -130,7 +130,7 @@ architecture built for fully-unattended agent use.
 ### Highlights
 
 - **92 RPC tools** across `tabs / nav / dom / cookies / storage / net /
-  session / system / vision / behavior`, all with a single JSON-RPC envelope.
+session / system / vision / behavior`, all with a single JSON-RPC envelope.
 - **Legacy name compatibility** via `tools/aliases.js` so existing agent
   harnesses (OpenCode CLI, Browser-Use, Claude Computer Use, …) keep working
   without modification.

@@ -21,34 +21,36 @@ SCHRITT 2: SOFORT Screenshot des GESAMTEN Bildschirms machen
 SCHRITT 3: Screenshot an Vision-Modell senden mit Kontext-Prompt
 SCHRITT 4: Vision-Modell-Antwort LESEN und VERSTEHEN
 SCHRITT 5: NUR bei POSITIVEM Vision-Ergebnis → nächste Aktion erlaubt
-           Bei NEGATIVEM/UNKLAREM Ergebnis → STOPP, Situation analysieren
+Bei NEGATIVEM/UNKLAREM Ergebnis → STOPP, Situation analysieren
 
 ## 3. KLICK-ESKALATION MIT VISION-GATE (ABSOLUT PFLICHT — JEDE STUFE)
 
 **DIESES MANDAT GILT FÜR JEDE KLICK-ESKALATIONSKETTE IN JEDEM SCRIPT, JEDEM AGENTEN, JEDEM FLOW.**
 
-Bisherige Klick-Eskalationen haben blind eskaliert: click_element schlägt fehl → ghost_click wird SOFORT gefeuert → keyboard → vision_click → coords. 
+Bisherige Klick-Eskalationen haben blind eskaliert: click_element schlägt fehl → ghost_click wird SOFORT gefeuert → keyboard → vision_click → coords.
 **Kein einziger Vision-Check dazwischen. Das ist AUTORUN und PERMANENT VERBOTEN.**
 
 ### Die Pflicht-Architektur für jede Eskalationsstufe
 
 Stufe 1: click_element ausführen
-         ↓
-         SOFORT Screenshot → Vision-Check
-         Vision sagt PROCEED? → FERTIG, keine weitere Eskalation nötig
-         Vision sagt RETRY? → weiter zu Stufe 2
-         ↓
+↓
+SOFORT Screenshot → Vision-Check
+Vision sagt PROCEED? → FERTIG, keine weitere Eskalation nötig
+Vision sagt RETRY? → weiter zu Stufe 2
+↓
 Stufe 2: ghost_click ausführen
-         ↓
-         SOFORT Screenshot → Vision-Check
-         Vision sagt PROCEED? → FERTIG
-         Vision sagt RETRY? → weiter zu Stufe 3
-         ... und so weiter bis Stufe 5.
+↓
+SOFORT Screenshot → Vision-Check
+Vision sagt PROCEED? → FERTIG
+Vision sagt RETRY? → weiter zu Stufe 3
+... und so weiter bis Stufe 5.
 
 **Es gibt KEINE Abkürzung. Es gibt KEIN "Methode X hat DOM-Change ausgelöst, also überspringen wir Vision". DOM-Check ERSETZT NICHT den Vision-Check. Beides ist Pflicht.**
 
 ### Gilt für ALLE Scripts und Flows
+
 Dieses Mandat gilt für:
+
 - **JEDEN** Python/JS/Bash-Script der auch nur einen Browser-Tab öffnet
 - **JEDEN** Agenten der irgendeine Web-Aktion ausführt
 - **JEDEN** n8n-Workflow der Selenium/nodriver/Bridge-Calls macht

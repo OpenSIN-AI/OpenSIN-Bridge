@@ -5,12 +5,14 @@
 This repository is for the **shared browser bridge layer**.
 
 Put the change here when it affects:
+
 - bridge contracts and transport
 - authenticated browser/session access
 - extension ↔ server interaction surfaces
 - bridge resilience, replay, or capability mapping
 
 Do **not** put the change here when it belongs to:
+
 - a worker-specific automation policy
 - monetization/business logic for a single downstream agent
 - marketing/docs canon

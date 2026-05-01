@@ -18,15 +18,15 @@ Die Integration bringt bewährte Anti-Bot-Techniken aus dem Python-basierten Ste
 
 ### Neue Dateien
 
-| Datei | Zweck |
-|-------|-------|
+| Datei                                          | Zweck                             |
+| ---------------------------------------------- | --------------------------------- |
 | `extension/src/content/stealth-human-mouse.js` | Human Mouse Simulation im Browser |
-| `docs/INTEGRATION-STEALTH-BROWSER.md` | Dieses Dokument |
+| `docs/INTEGRATION-STEALTH-BROWSER.md`          | Dieses Dokument                   |
 
 ### Geänderte Dateien
 
-| Datei | Änderung |
-|-------|----------|
+| Datei                     | Änderung                                   |
+| ------------------------- | ------------------------------------------ |
 | `extension/manifest.json` | Content Script für Human Mouse hinzugefügt |
 
 ---
@@ -38,10 +38,11 @@ Die Integration bringt bewährte Anti-Bot-Techniken aus dem Python-basierten Ste
 Die folgenden Algorithmen wurden von `human_mouse.py` nach JavaScript portiert:
 
 #### 1. Physiologischer Tremor (8-12 Hz)
+
 ```javascript
 // Original (Python):
-tx = x + random.gauss(0, 0.3)
-ty = y + random.gauss(0, 0.3)
+tx = x + random.gauss(0, 0.3);
+ty = y + random.gauss(0, 0.3);
 
 // Portiert (JavaScript):
 const tx = point.x + gaussianRandom(0, intensity);
@@ -49,15 +50,18 @@ const ty = point.y + gaussianRandom(0, intensity);
 ```
 
 #### 2. Kubische Bezier-Kurven
+
 ```javascript
 // Natürliche Bewegungswege mit Beschleunigungsprofil
-const x = Math.pow(invT, 3) * start.x +
-          3 * Math.pow(invT, 2) * t * ctrl1.x +
-          3 * invT * Math.pow(t, 2) * ctrl2.x +
-          Math.pow(t, 3) * end.x;
+const x =
+  Math.pow(invT, 3) * start.x +
+  3 * Math.pow(invT, 2) * t * ctrl1.x +
+  3 * invT * Math.pow(t, 2) * ctrl2.x +
+  Math.pow(t, 3) * end.x;
 ```
 
 #### 3. Gaußsche Geschwindigkeitsverteilung
+
 ```javascript
 // Variable Bewegungsgeschwindigkeit wie bei echten Menschen
 const delay = gaussianRandom(config.baseSpeed, config.speedVariance);
@@ -69,33 +73,33 @@ Das Modul stellt eine öffentliche API im Window-Objekt bereit:
 
 ```javascript
 // Status abrufen
-window.__opensin_humanMouse__.getStatus()
+window.__opensin_humanMouse__.getStatus();
 // → { enabled: true, version: "1.0.0", lastPosition: {...}, config: {...} }
 
 // Aktivieren/Deaktivieren
-window.__opensin_humanMouse__.setEnabled(false)
+window.__opensin_humanMouse__.setEnabled(false);
 
 // Konfiguration anpassen
-window.__opensin_humanMouse__.updateConfig({ tremorIntensity: 0.5 })
+window.__opensin_humanMouse__.updateConfig({ tremorIntensity: 0.5 });
 
 // Manuelle Bewegung
-await window.__opensin_humanMouse__.move(100, 200)
+await window.__opensin_humanMouse__.move(100, 200);
 
 // Menschlicher Klick
-await window.__opensin_humanMouse__.click(150, 250)
+await window.__opensin_humanMouse__.click(150, 250);
 ```
 
 ---
 
 ## 📊 Vergleich: Vorher vs. Nachher
 
-| Feature | Vorher | Nachher |
-|---------|--------|---------|
-| Mausbewegungen | Linear, roboterhaft | Organisch, menschlich |
-| Tremor-Simulation | ❌ Nicht vorhanden | ✅ 8-12 Hz physiologisch |
-| Geschwindigkeitsprofil | Konstant | Gaußsch verteilt |
-| Klick-Verhalten | Sofortiger Klick | Mit Reaktionszeit |
-| Bot-Erkennungsrisiko | Hoch | Minimal |
+| Feature                | Vorher              | Nachher                  |
+| ---------------------- | ------------------- | ------------------------ |
+| Mausbewegungen         | Linear, roboterhaft | Organisch, menschlich    |
+| Tremor-Simulation      | ❌ Nicht vorhanden  | ✅ 8-12 Hz physiologisch |
+| Geschwindigkeitsprofil | Konstant            | Gaußsch verteilt         |
+| Klick-Verhalten        | Sofortiger Klick    | Mit Reaktionszeit        |
+| Bot-Erkennungsrisiko   | Hoch                | Minimal                  |
 
 ---
 
@@ -116,14 +120,14 @@ if (window.__opensin_humanMouse__) {
   // Für Umfrage-Plattformen: Minimale Bewegung für Präzision
   window.__opensin_humanMouse__.updateConfig({
     tremorIntensity: 0.1,
-    baseSpeed: 0.015
+    baseSpeed: 0.015,
   });
-  
+
   // Für generelle Nutzung: Maximale Natürlichkeit
   window.__opensin_humanMouse__.updateConfig({
     tremorIntensity: 0.5,
     baseSpeed: 0.008,
-    speedVariance: 0.007
+    speedVariance: 0.007,
   });
 }
 ```
@@ -170,17 +174,20 @@ Diese Integration ist Teil des größeren **OpenSIN AI Agent Systems**:
 ## 📈 Roadmap
 
 ### v1.0.0 (Abgeschlossen ✅)
+
 - [x] Grundlegende Human Mouse Simulation
 - [x] Physiologischer Tremor
 - [x] Bezier-Kurven
 - [x] Manifest-Integration
 
 ### v1.1.0 (Geplant)
+
 - [ ] Shadow DOM Unterstützung
 - [ ] Iframe-übergreifende Mauspositionierung
 - [ ] Erweiterte Konfigurationsoptionen
 
 ### v2.0.0 (Vision)
+
 - [ ] Machine Learning für adaptive Bewegungsmuster
 - [ ] Plattformspezifische Profile (Mobile vs. Desktop)
 - [ ] Echtzeit-Anpassung basierend auf Seitenverhalten
@@ -192,20 +199,23 @@ Diese Integration ist Teil des größeren **OpenSIN AI Agent Systems**:
 ### Lokales Testen
 
 1. Repository klonen:
+
 ```bash
 git clone https://github.com/OpenSIN-AI/OpenSIN-Bridge.git
 cd OpenSIN-Bridge
 ```
 
 2. Extension laden:
+
 - Chrome öffnen → `chrome://extensions/`
 - "Entwicklermodus" aktivieren
 - "Entpackte Erweiterung laden" → `extension/` Ordner wählen
 
 3. Testen auf einer Seite:
+
 ```javascript
 // In der DevTools Console:
-console.log(window.__opensin_humanMouse__.getStatus())
+console.log(window.__opensin_humanMouse__.getStatus());
 ```
 
 ### Debugging
@@ -214,8 +224,8 @@ console.log(window.__opensin_humanMouse__.getStatus())
 // Detaillierte Logs aktivieren
 window.__opensin_config__ = {
   humanMouse: {
-    debug: true
-  }
+    debug: true,
+  },
 };
 
 // Nach Reload:
@@ -235,10 +245,12 @@ Apache 2.0 - Siehe [LICENSE](../LICENSE)
 Diese Integration basiert auf der Arbeit des gesamten OpenSIN-Teams und integriert Best Practices aus mehreren Repositories.
 
 **Hauptentwickler:**
+
 - Stealth-Browser Team (Python-Implementierung)
 - Bridge Team (JavaScript-Portierung)
 
 **Review:**
+
 - Infra-SIN Global Brain Team
 
 ---
@@ -246,10 +258,11 @@ Diese Integration basiert auf der Arbeit des gesamten OpenSIN-Teams und integrie
 ## 📞 Support
 
 Bei Fragen oder Problemen:
+
 1. [GitHub Issues](https://github.com/OpenSIN-AI/OpenSIN-Bridge/issues) erstellen
 2. [Discord Community](https://discord.gg/opensin) beitreten
 3. [Dokumentation](https://opensin.ai/docs) konsultieren
 
 ---
 
-*Zuletzt aktualisiert: 2024 | OpenSIN AI Agent System*
+_Zuletzt aktualisiert: 2024 | OpenSIN AI Agent System_

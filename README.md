@@ -32,13 +32,13 @@
 
 ### 🔑 Kernmerkmale
 
-| Feature | Beschreibung |
-|---------|-------------|
-| **Echte Sessions** | Nutzt echte Cookies, Passwörter, Autofill und Fingerprints |
-| **92 RPC Tools** | Vollständige Kontrolle über Tabs, DOM, Cookies, Network und mehr |
-| **Stealth v2** | 17-Evasion-Module neutralisieren Bot-Erkennung |
-| **Multi-Transport** | WebSocket, Native Messaging, extern_connectable |
-| **Session-Bound** | Perfekt für Plattformen, die Playwright/Puppeteer blockieren |
+| Feature             | Beschreibung                                                     |
+| ------------------- | ---------------------------------------------------------------- |
+| **Echte Sessions**  | Nutzt echte Cookies, Passwörter, Autofill und Fingerprints       |
+| **92 RPC Tools**    | Vollständige Kontrolle über Tabs, DOM, Cookies, Network und mehr |
+| **Stealth v2**      | 17-Evasion-Module neutralisieren Bot-Erkennung                   |
+| **Multi-Transport** | WebSocket, Native Messaging, extern_connectable                  |
+| **Session-Bound**   | Perfekt für Plattformen, die Playwright/Puppeteer blockieren     |
 
 ### 💡 Anwendungsfälle
 
@@ -56,14 +56,14 @@ Die meisten Agent-Browser starten ein frisches Chromium ohne Profil. Das ist per
 
 ### Vergleichstabelle
 
-| Dimension | Playwright/Puppeteer | **OpenSIN Bridge** |
-|-----------|---------------------|-------------------|
-| **Chrome Instanz** | Gespawnetes Chromium | **Echtes installiertes Chrome** |
-| **Profil/Cookies/2FA** | Leer, synthetisch | **Echt, vor-authentifiziert** |
-| **navigator.webdriver** | `true` (leckt!) | **`undefined` (v2 Stealth)** |
-| **Headful** | Optional | **Standard — User sieht alles** |
-| **Fingerprint** | Generisch | **Individuell wie echter User** |
-| **Use Case** | Testing, Scraping | **Session-bound Automation** |
+| Dimension               | Playwright/Puppeteer | **OpenSIN Bridge**              |
+| ----------------------- | -------------------- | ------------------------------- |
+| **Chrome Instanz**      | Gespawnetes Chromium | **Echtes installiertes Chrome** |
+| **Profil/Cookies/2FA**  | Leer, synthetisch    | **Echt, vor-authentifiziert**   |
+| **navigator.webdriver** | `true` (leckt!)      | **`undefined` (v2 Stealth)**    |
+| **Headful**             | Optional             | **Standard — User sieht alles** |
+| **Fingerprint**         | Generisch            | **Individuell wie echter User** |
+| **Use Case**            | Testing, Scraping    | **Session-bound Automation**    |
 
 > **💡 WICHTIG FÜR ENTWICKLER:**  
 > Diese Extension ist NICHT für hermetic testing gedacht. Dafür bleibt Playwright die bessere Wahl. Bridge ist spezialisiert auf Szenarien, wo Session-State (Cookies, Logins, History) überlebenswichtig ist.
@@ -189,7 +189,7 @@ async def login_agent():
         }))
         response = await ws.recv()
         print("Navigation:", response)
-        
+
         # 2. Fülle Email-Feld aus
         await ws.send(json.dumps({
             "type": "tool_request",
@@ -200,7 +200,7 @@ async def login_agent():
                 "text": "user@example.com"
             }
         }))
-        
+
         # 3. Fülle Passwort-Feld aus
         await ws.send(json.dumps({
             "type": "tool_request",
@@ -211,7 +211,7 @@ async def login_agent():
                 "text": "geheim123"
             }
         }))
-        
+
         # 4. Klicke Login-Button (mit menschlicher Maus!)
         await ws.send(json.dumps({
             "type": "tool_request",
@@ -219,7 +219,7 @@ async def login_agent():
             "method": "dom.click",
             "params": {"selector": "button[type='submit']"}
         }))
-        
+
         # 5. Warte auf Erfolg
         await asyncio.sleep(2)
         print("✅ Login abgeschlossen!")
@@ -249,74 +249,75 @@ Alle 92 Tools sind über JSON-RPC verfügbar. Hier die wichtigsten Kategorien:
 
 ### Tabs-Management
 
-| Tool | Beschreibung | Beispiel |
-|------|-------------|----------|
-| `tabs.list` | Liste alle offenen Tabs | `{"method": "tabs.list"}` |
-| `tabs.create` | Erstelle neuen Tab | `{"method": "tabs.create", "params": {"url": "..."}}` |
-| `tabs.close` | Schließe Tab | `{"method": "tabs.close", "params": {"tabId": 123}}` |
-| `tabs.activate` | Aktiviere Tab | `{"method": "tabs.activate", "params": {"tabId": 123}}` |
+| Tool            | Beschreibung            | Beispiel                                                |
+| --------------- | ----------------------- | ------------------------------------------------------- |
+| `tabs.list`     | Liste alle offenen Tabs | `{"method": "tabs.list"}`                               |
+| `tabs.create`   | Erstelle neuen Tab      | `{"method": "tabs.create", "params": {"url": "..."}}`   |
+| `tabs.close`    | Schließe Tab            | `{"method": "tabs.close", "params": {"tabId": 123}}`    |
+| `tabs.activate` | Aktiviere Tab           | `{"method": "tabs.activate", "params": {"tabId": 123}}` |
 
 ### Navigation
 
-| Tool | Beschreibung | Beispiel |
-|------|-------------|----------|
-| `nav.goto` | Navigiere zu URL | `{"method": "nav.goto", "params": {"url": "..."}}` |
-| `nav.back` | Zurück | `{"method": "nav.back"}` |
-| `nav.reload` | Neu laden | `{"method": "nav.reload"}` |
-| `nav.waitForLoad` | Warte auf Load-Event | `{"method": "nav.waitForLoad"}` |
+| Tool              | Beschreibung         | Beispiel                                           |
+| ----------------- | -------------------- | -------------------------------------------------- |
+| `nav.goto`        | Navigiere zu URL     | `{"method": "nav.goto", "params": {"url": "..."}}` |
+| `nav.back`        | Zurück               | `{"method": "nav.back"}`                           |
+| `nav.reload`      | Neu laden            | `{"method": "nav.reload"}`                         |
+| `nav.waitForLoad` | Warte auf Load-Event | `{"method": "nav.waitForLoad"}`                    |
 
 ### DOM-Interaktion (HERZSTÜCK!)
 
-| Tool | Beschreibung | Besonderheit |
-|------|-------------|--------------|
-| `dom.click` | Klicke Element | **3-Stage Fallback:** CDP → DOM.click() → MouseEvent |
-| `dom.type` | Tippe Text | Mit menschlichen Verzögerungen |
-| `dom.fill` | Fülle Formular | Smart Field Detection |
-| `dom.hover` | Hover über Element | Für Dropdown-Menüs |
-| `dom.scroll` | Scrolle Seite | Pixel-genau |
-| `dom.snapshot` | Hole AX-Tree | Kompakt, mit Handles |
-| `dom.evaluate` | JS ausführen | Im Page-Kontext |
+| Tool           | Beschreibung       | Besonderheit                                         |
+| -------------- | ------------------ | ---------------------------------------------------- |
+| `dom.click`    | Klicke Element     | **3-Stage Fallback:** CDP → DOM.click() → MouseEvent |
+| `dom.type`     | Tippe Text         | Mit menschlichen Verzögerungen                       |
+| `dom.fill`     | Fülle Formular     | Smart Field Detection                                |
+| `dom.hover`    | Hover über Element | Für Dropdown-Menüs                                   |
+| `dom.scroll`   | Scrolle Seite      | Pixel-genau                                          |
+| `dom.snapshot` | Hole AX-Tree       | Kompakt, mit Handles                                 |
+| `dom.evaluate` | JS ausführen       | Im Page-Kontext                                      |
 
 > **💡 WICHTIG:** Der `dom.click` verwendet eine intelligente 3-Stufen-Strategie:
+>
 > 1. **CDP Mouse Input** (echte Mausbewegung via Chrome Debugger Protocol)
 > 2. **DOM click()** (Fallback wenn CDP blockiert ist)
 > 3. **MouseEvent Dispatch** (letzter Ausweg)
-> 
+>
 > Jeder Klick wird verifiziert durch DOM-Diff-Hash und optional Screenshot-Delta.
 > **Kein false positive!** Wenn die Seite nicht reagiert, bekommst du ehrliches Feedback.
 
 ### Cookies & Storage
 
-| Tool | Beschreibung |
-|------|-------------|
-| `cookies.get` | Hole Cookies für Domain |
-| `cookies.set` | Setze Cookie |
-| `cookies.getAll` | Alle Cookies |
-| `storage.local.get` | LocalStorage lesen |
+| Tool                  | Beschreibung             |
+| --------------------- | ------------------------ |
+| `cookies.get`         | Hole Cookies für Domain  |
+| `cookies.set`         | Setze Cookie             |
+| `cookies.getAll`      | Alle Cookies             |
+| `storage.local.get`   | LocalStorage lesen       |
 | `storage.session.set` | SessionStorage schreiben |
 
 ### Network
 
-| Tool | Beschreibung |
-|------|-------------|
-| `net.fetch` | HTTP Request ausführen |
-| `net.setUserAgent` | User-Agent ändern |
-| `net.block` | Ressourcen blocken (Ads, Tracker) |
-| `net.captureStart` | Network-Traffic mitschneiden |
+| Tool               | Beschreibung                      |
+| ------------------ | --------------------------------- |
+| `net.fetch`        | HTTP Request ausführen            |
+| `net.setUserAgent` | User-Agent ändern                 |
+| `net.block`        | Ressourcen blocken (Ads, Tracker) |
+| `net.captureStart` | Network-Traffic mitschneiden      |
 
 ### Vision (OCR & Element-Lokalisierung)
 
-| Tool | Beschreibung |
-|------|-------------|
+| Tool            | Beschreibung                    |
+| --------------- | ------------------------------- |
 | `vision.locate` | Finde Element per Bilderkennung |
-| `vision.read` | OCR Texterkennung |
+| `vision.read`   | OCR Texterkennung               |
 
 ### Behavior Recording
 
-| Tool | Beschreibung |
-|------|-------------|
-| `behavior.start` | Starte Aufnahme |
-| `behavior.stop` | Stoppe Aufnahme |
+| Tool              | Beschreibung        |
+| ----------------- | ------------------- |
+| `behavior.start`  | Starte Aufnahme     |
+| `behavior.stop`   | Stoppe Aufnahme     |
 | `behavior.export` | Exportiere Timeline |
 
 ---
@@ -327,23 +328,24 @@ Das Herzstück der Unsichtbarkeit. 17 Evasion-Module laufen als MAIN-World Conte
 
 ### Abgedeckte Fingerprints
 
-| Kategorie | Module | Status |
-|-----------|--------|--------|
-| **Navigator** | `webdriver`, `plugins`, `mimeTypes`, `languages` | ✅ |
-| **Hardware** | `hardwareConcurrency`, `deviceMemory` | ✅ |
-| **Permissions** | `permissions.query` | ✅ |
-| **Media** | `mediaDevices`, `getBattery`, `connection` | ✅ |
-| **Chrome Runtime** | `window.chrome.runtime` | ✅ |
-| **Window Size** | `outerWidth`, `outerHeight` | ✅ |
-| **iFrames** | `HTMLIFrameElement.contentWindow` | ✅ |
-| **WebGL** | `getParameter` (Vendor/Renderer Spoof) | ✅ |
-| **Canvas** | `toDataURL`, `getImageData` (Micro-Noise) | ✅ |
-| **AudioContext** | `getChannelData` (Micro-Noise) | ✅ |
-| **Function.toString** | Proxy-preserved native signature | ✅ |
+| Kategorie             | Module                                           | Status |
+| --------------------- | ------------------------------------------------ | ------ |
+| **Navigator**         | `webdriver`, `plugins`, `mimeTypes`, `languages` | ✅     |
+| **Hardware**          | `hardwareConcurrency`, `deviceMemory`            | ✅     |
+| **Permissions**       | `permissions.query`                              | ✅     |
+| **Media**             | `mediaDevices`, `getBattery`, `connection`       | ✅     |
+| **Chrome Runtime**    | `window.chrome.runtime`                          | ✅     |
+| **Window Size**       | `outerWidth`, `outerHeight`                      | ✅     |
+| **iFrames**           | `HTMLIFrameElement.contentWindow`                | ✅     |
+| **WebGL**             | `getParameter` (Vendor/Renderer Spoof)           | ✅     |
+| **Canvas**            | `toDataURL`, `getImageData` (Micro-Noise)        | ✅     |
+| **AudioContext**      | `getChannelData` (Micro-Noise)                   | ✅     |
+| **Function.toString** | Proxy-preserved native signature                 | ✅     |
 
 ### So funktioniert's
 
 Jedes Modul ist:
+
 - **Idempotent:** Kann mehrfach ausgeführt werden ohne Seiteneffekte
 - **Try-Catch-gewrappt:** Ein Fehler stoppt nicht den gesamten Stealth
 - **Introspektierbar:** `window.__opensin_stealth_status__()` gibt Status zurück
@@ -365,10 +367,11 @@ pnpm run ext:dev
 
 > **⚠️ KRITISCH FÜR ENTWICKLER:**  
 > Teste JEDE Änderung an Stealth-Modulen gegen mindestens 3 Detektoren:
+>
 > - https://bot.sannysoft.com
 > - https://abrahamjuliot.github.io/creepjs/
 > - https://pixelscan.net
-> 
+>
 > Dokumentiere Ergebnisse in `docs/BENCHMARKS.md`. Ohne Benchmark-Update kein Merge!
 
 ---
@@ -404,6 +407,7 @@ OpenSIN-Bridge/
 ### Wichtige Entwicklungsregeln
 
 1. **NIEMALS** im default Branch arbeiten! Immer Issue-Worktrees nutzen:
+
    ```bash
    pnpm run issue:worktree -- --issue 42 --branch feature/mein-feature
    ```
@@ -442,6 +446,7 @@ pnpm run verify:issue-scope -- <DATEIEN>
 ```
 
 Local bridge mode (dev):
+
 - Start the local MCP server: `PORT=7777 node server.js`
 - Load the unpacked extension from `./extension`
 - The unpacked build defaults to `ws://localhost:7777/extension`
@@ -449,12 +454,14 @@ Local bridge mode (dev):
 ## Runtime environment
 
 Required server env vars:
+
 - `PORT`
 - `TOOL_TIMEOUT_MS`
 - `EXTENSION_STALE_MS`
 - `KEEPALIVE_URL`
 
 Required Cloudflare/worker secrets:
+
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_KEY`
 - `STRIPE_SECRET_KEY`
@@ -462,6 +469,7 @@ Required Cloudflare/worker secrets:
 - `OPENAI_API_KEY`
 
 Local bridge notes:
+
 - `ws://localhost:7777/extension` is the unpacked-extension default
 - public tunneling should use a durable named Cloudflare Tunnel when the URL must stay stable
 
@@ -469,13 +477,13 @@ Local bridge notes:
 
 ### Test-Suites
 
-| Suite | Beschreibung | Command |
-|-------|-------------|---------|
-| **Stealth v2** | Unit-Tests für Stealth-Module | `pnpm run test:stealth` |
-| **Bridge Contract** | Tool-API-Verifikation | `pnpm run test:contract` |
-| **Behavior Timeline** | Recording/Playback-Tests | `pnpm run test:behavior` |
-| **Native Host** | Python-Host-Integration | `pnpm run test:native` |
-| **Issue Worktree** | Isolationstests | `pnpm run test:issue-worktree` |
+| Suite                 | Beschreibung                  | Command                        |
+| --------------------- | ----------------------------- | ------------------------------ |
+| **Stealth v2**        | Unit-Tests für Stealth-Module | `pnpm run test:stealth`        |
+| **Bridge Contract**   | Tool-API-Verifikation         | `pnpm run test:contract`       |
+| **Behavior Timeline** | Recording/Playback-Tests      | `pnpm run test:behavior`       |
+| **Native Host**       | Python-Host-Integration       | `pnpm run test:native`         |
+| **Issue Worktree**    | Isolationstests               | `pnpm run test:issue-worktree` |
 
 ### Benchmark-Prozedur
 
@@ -497,31 +505,33 @@ OpenSIN Bridge und OpenSIN Stealth Browser teilen sich dieselben Algorithmen fü
 
 ### Gemeinsame Features
 
-| Feature | Bridge (JS) | Stealth Browser (Python) |
-|---------|-------------|-------------------------|
-| **Bezier-Kurven** | ✅ `automation/human.js` | ✅ `input/human_mouse.py` |
-| **Physiologischer Tremor** | ✅ ±0.4px Jitter | ✅ ±0.4px Jitter |
-| **Variable Geschwindigkeit** | ✅ Gauss-Verteilung | ✅ Gauss-Verteilung |
-| **3-Stage Clicker** | ✅ CDP → DOM → Dispatch | ✅ Vision → DOM → JS-Force |
-| **Smart Frame Scan** | ✅ Iframe-Rekursion | ✅ Iframe-Rekursion |
+| Feature                      | Bridge (JS)              | Stealth Browser (Python)   |
+| ---------------------------- | ------------------------ | -------------------------- |
+| **Bezier-Kurven**            | ✅ `automation/human.js` | ✅ `input/human_mouse.py`  |
+| **Physiologischer Tremor**   | ✅ ±0.4px Jitter         | ✅ ±0.4px Jitter           |
+| **Variable Geschwindigkeit** | ✅ Gauss-Verteilung      | ✅ Gauss-Verteilung        |
+| **3-Stage Clicker**          | ✅ CDP → DOM → Dispatch  | ✅ Vision → DOM → JS-Force |
+| **Smart Frame Scan**         | ✅ Iframe-Rekursion      | ✅ Iframe-Rekursion        |
 
 ### Code-Beispiel: Gleiche Algorithmen in beiden Sprachen
 
 **JavaScript (Bridge):**
+
 ```javascript
 // extension/src/automation/human.js
 function applyPhysiologicTremor(points) {
-    return points.map((p, i) => {
-        if (i === 0 || i === points.length - 1) return p;
-        return {
-            x: p.x + (Math.random() - 0.5) * 0.8,
-            y: p.y + (Math.random() - 0.5) * 0.8
-        };
-    });
+  return points.map((p, i) => {
+    if (i === 0 || i === points.length - 1) return p;
+    return {
+      x: p.x + (Math.random() - 0.5) * 0.8,
+      y: p.y + (Math.random() - 0.5) * 0.8,
+    };
+  });
 }
 ```
 
 **Python (Stealth Browser):**
+
 ```python
 # input/human_mouse.py
 def _apply_physiologic_tremor(pts):
@@ -548,7 +558,8 @@ def _apply_physiologic_tremor(pts):
 Andere Entwickler verstehen sonst den Code nicht und machen alles kaputt.
 
 ✅ **IMMER Issue-Worktrees nutzen**  
-Nie direkt auf `main` committen!  
+Nie direkt auf `main` committen!
+
 ```bash
 pnpm run issue:worktree -- --issue 42 --branch feature/xyz
 ```

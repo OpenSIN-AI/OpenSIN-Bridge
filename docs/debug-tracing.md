@@ -15,7 +15,7 @@ dom.click  ok   <-- but what actually changed? did the page navigate?
                     did a modal intercept? did the page throw in console?
 ```
 
-There was no structured signal of *what the browser did* in response to
+There was no structured signal of _what the browser did_ in response to
 each tool call, so every investigation started with a live reproduction
 over Zoom. `tools/debug.*` closes that gap by capturing, for each call:
 
@@ -58,9 +58,9 @@ Wraps an arbitrary inner router call. The inner call is expressed as
 await bridge.call("debug.traceAction", {
   sessionId,
   operation: { name: "dom.click", args: { selector: "div.survey-item" } },
-  screenshot: false,        // set true only for key steps — it's slow
+  screenshot: false, // set true only for key steps — it's slow
   metadata: { step: "pick-highest-paying-survey" },
-})
+});
 ```
 
 Returns the full record:

@@ -10,12 +10,14 @@
 ## Warum deprecated?
 
 Die Bridge hatte 4 fundamentale Bugs:
+
 1. Content-Script Crash (`stealth-human-mouse.js` writable:false)
 2. `router(msg)` statt `router.invoke()` (Object vs Function)
 3. Falsches Response-Format (`jsonrpc:2.0` statt `type:tool_response`)
 4. `@ant/computer-use-swift` + `@ant/computer-use-input` — Anthropic-intern, nicht öffentlich
 
 **computer-use-mcp** löst ALLE diese Probleme:
+
 - Keine Chrome Extension nötig
 - Keine kaputten Transport-Dateien
 - Kein WebSocket-Protokoll
@@ -65,6 +67,7 @@ PORT=7777 node server.js
 ```
 
 Gesundheitscheck:
+
 ```bash
 curl http://localhost:7777/health
 # → {"status":"ok","extensionConnected":true,"toolsCount":91}
@@ -100,12 +103,12 @@ curl -s http://localhost:7777/mcp -X POST -H "Content-Type: application/json" \
 
 ## 5. Bekannte Fehler & Fixes
 
-| Fehler | Ursache | Fix |
-|--------|---------|-----|
-| Service worker Status code: 3 | Transport-Dateien fehlen | `ws.js`, `external.js`, `native.js`, `behavior.js` erstellen |
-| "Extension disconnected" trotz `extensionConnected:true` | Keep-Alive-Ping fehlt (>90s) | ws.js sendet alle 60s `{"method":"ping"}` |
-| WebSocket connected, kein Ping | `initLifecycle` hat keinen WebSocket-Ping — nur SW-Wakeup | ws.js `onopen` → `setInterval` Ping |
-| HF Spaces Bridge zeigt `extensionConnected: null` | Extension verbindet zu localhost, nicht HF Spaces | Extension Config auf `wss://openjerro-...` ändern ODER lokalen Server starten |
+| Fehler                                                   | Ursache                                                   | Fix                                                                           |
+| -------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Service worker Status code: 3                            | Transport-Dateien fehlen                                  | `ws.js`, `external.js`, `native.js`, `behavior.js` erstellen                  |
+| "Extension disconnected" trotz `extensionConnected:true` | Keep-Alive-Ping fehlt (>90s)                              | ws.js sendet alle 60s `{"method":"ping"}`                                     |
+| WebSocket connected, kein Ping                           | `initLifecycle` hat keinen WebSocket-Ping — nur SW-Wakeup | ws.js `onopen` → `setInterval` Ping                                           |
+| HF Spaces Bridge zeigt `extensionConnected: null`        | Extension verbindet zu localhost, nicht HF Spaces         | Extension Config auf `wss://openjerro-...` ändern ODER lokalen Server starten |
 
 ---
 
@@ -147,4 +150,4 @@ Worker → curl http://localhost:7777/mcp → Bridge Server → WebSocket → Ex
 
 ---
 
-*Letzte Aktualisierung: 28. April 2026*
+_Letzte Aktualisierung: 28. April 2026_

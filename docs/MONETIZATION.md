@@ -6,13 +6,13 @@
 
 ### The Chrome Extension Dilemma
 
-| Fact | Source |
-|------|--------|
-| Chrome extensions are 100% client-side — anyone can read the code | Chrome Dev Docs |
-| Google FORBIDS obfuscation in Chrome Web Store | [Chrome Policy: Code Readability](https://developer.chrome.com/docs/webstore/program-policies/code-readability) |
-| Manifest V3 FORBIDS remote code loading | Chrome MV3 Migration Guide |
-| Google deprecated Chrome Web Store payments in 2020 | Chrome Web Store Docs |
-| Self-hosting outside Chrome Web Store works ONLY on Linux or via Enterprise Policies | Chrome Distribution Docs |
+| Fact                                                                                 | Source                                                                                                          |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Chrome extensions are 100% client-side — anyone can read the code                    | Chrome Dev Docs                                                                                                 |
+| Google FORBIDS obfuscation in Chrome Web Store                                       | [Chrome Policy: Code Readability](https://developer.chrome.com/docs/webstore/program-policies/code-readability) |
+| Manifest V3 FORBIDS remote code loading                                              | Chrome MV3 Migration Guide                                                                                      |
+| Google deprecated Chrome Web Store payments in 2020                                  | Chrome Web Store Docs                                                                                           |
+| Self-hosting outside Chrome Web Store works ONLY on Linux or via Enterprise Policies | Chrome Distribution Docs                                                                                        |
 
 ### Our Solution: Thin-Client + Server-Side Brain
 
@@ -22,22 +22,22 @@ The extension is deliberately worthless on its own. It's a remote control for ou
 
 ### Why 5 EUR/month?
 
-| Factor | Reasoning |
-|--------|-----------|
-| Market research | Most Chrome extension SaaS products charge 5-15 USD/month |
-| User psychology | 5 EUR feels like "lunch money" — low friction to convert |
-| Margin | 87% margin after costs (0.65 EUR cost per user) |
-| Competition | No direct competitor offers autonomous Prolific automation |
+| Factor          | Reasoning                                                    |
+| --------------- | ------------------------------------------------------------ |
+| Market research | Most Chrome extension SaaS products charge 5-15 USD/month    |
+| User psychology | 5 EUR feels like "lunch money" — low friction to convert     |
+| Margin          | 87% margin after costs (0.65 EUR cost per user)              |
+| Competition     | No direct competitor offers autonomous Prolific automation   |
 | Value delivered | Users earn 50-200 EUR/month passively — 5 EUR is 2.5-10% fee |
 
 ### Pricing Tiers
 
-| Tier | Price | Target |
-|------|-------|--------|
-| **Free Install** | 0 EUR | Everyone (maximizes Chrome Web Store rankings) |
-| **OpenSIN Pro** | 5 EUR/month | Individual researchers / passive income seekers |
-| **OpenSIN Team** | 15 EUR/month | Agencies, 5 seats, priority support |
-| **OpenSIN Enterprise** | Custom | Universities, research labs, API access |
+| Tier                   | Price        | Target                                          |
+| ---------------------- | ------------ | ----------------------------------------------- |
+| **Free Install**       | 0 EUR        | Everyone (maximizes Chrome Web Store rankings)  |
+| **OpenSIN Pro**        | 5 EUR/month  | Individual researchers / passive income seekers |
+| **OpenSIN Team**       | 15 EUR/month | Agencies, 5 seats, priority support             |
+| **OpenSIN Enterprise** | Custom       | Universities, research labs, API access         |
 
 ## 3. Payment Implementation
 
@@ -148,14 +148,14 @@ CREATE POLICY "Users can read own license"
 
 ## 5. Marketing Channels
 
-| Channel | Strategy |
-|---------|----------|
-| Chrome Web Store SEO | Keywords: "prolific automation", "survey automation", "passive income" |
-| Reddit | r/prolific, r/beermoney, r/passiveincome — authentic posts showing earnings |
-| YouTube | Screen recordings of the extension earning money autonomously |
-| Blog | blog.opensin.ai articles on passive income with AI |
-| Twitter/X | @OpenSIN_AI — daily earning screenshots |
-| Product Hunt | Launch when 50+ users are paying |
+| Channel              | Strategy                                                                    |
+| -------------------- | --------------------------------------------------------------------------- |
+| Chrome Web Store SEO | Keywords: "prolific automation", "survey automation", "passive income"      |
+| Reddit               | r/prolific, r/beermoney, r/passiveincome — authentic posts showing earnings |
+| YouTube              | Screen recordings of the extension earning money autonomously               |
+| Blog                 | blog.opensin.ai articles on passive income with AI                          |
+| Twitter/X            | @OpenSIN_AI — daily earning screenshots                                     |
+| Product Hunt         | Launch when 50+ users are paying                                            |
 
 ## 6. Legal Considerations
 

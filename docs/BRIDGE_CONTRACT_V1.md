@@ -24,13 +24,13 @@ This document is the human-readable view. The machine-readable view ships in
 ## Read it
 
 ```js
-const contract = await rpc("bridge.contract")
-contract.version          // "opensin.bridge.contract/v1"
-contract.revision         // 1
-contract.methods          // [{ name, idempotent, mutates, raises, retryHint, ... }]
-contract.errorCodes       // ["transport_error", "target_gone", ...]
-contract.retryHints       // { transport_error: "safe_retry", ... }
-contract.internalToContract // { TIMEOUT: "timeout", ... }
+const contract = await rpc("bridge.contract");
+contract.version; // "opensin.bridge.contract/v1"
+contract.revision; // 1
+contract.methods; // [{ name, idempotent, mutates, raises, retryHint, ... }]
+contract.errorCodes; // ["transport_error", "target_gone", ...]
+contract.retryHints; // { transport_error: "safe_retry", ... }
+contract.internalToContract; // { TIMEOUT: "timeout", ... }
 ```
 
 The contract is also pinned in CI via
@@ -49,15 +49,15 @@ Every method declares an `idempotent` boolean. The rule is:
 
 Examples:
 
-| Method            | Idempotent | Mutates | Reasoning                                                |
-| ----------------- | ---------- | ------- | -------------------------------------------------------- |
-| `tabs.list`       | yes        | no      | Read-only.                                               |
-| `tabs.activate`   | yes        | yes     | Same tabId twice converges to the same active tab.       |
-| `nav.goto`        | no         | yes     | SPAs may build different state per navigation.           |
-| `dom.click`       | no         | yes     | Two submits = double order. Worker must verify.          |
-| `dom.snapshot`    | yes        | no      | Read-only.                                               |
-| `session.invalidate` | yes     | yes     | Already-invalid session stays invalid; converges.        |
-| `session.restore` | no         | yes     | Restoring twice can clobber fresh state. Worker decides. |
+| Method               | Idempotent | Mutates | Reasoning                                                |
+| -------------------- | ---------- | ------- | -------------------------------------------------------- |
+| `tabs.list`          | yes        | no      | Read-only.                                               |
+| `tabs.activate`      | yes        | yes     | Same tabId twice converges to the same active tab.       |
+| `nav.goto`           | no         | yes     | SPAs may build different state per navigation.           |
+| `dom.click`          | no         | yes     | Two submits = double order. Worker must verify.          |
+| `dom.snapshot`       | yes        | no      | Read-only.                                               |
+| `session.invalidate` | yes        | yes     | Already-invalid session stays invalid; converges.        |
+| `session.restore`    | no         | yes     | Restoring twice can clobber fresh state. Worker decides. |
 
 ## Error taxonomy
 
@@ -68,49 +68,49 @@ new error codes at runtime — every internal `BridgeError` is translated via
 
 ### Transport / RPC envelope
 
-| Code              | Meaning                                                |
-| ----------------- | ------------------------------------------------------ |
-| `transport_error` | WS / native host disconnected, request never reached.  |
-| `rpc_invalid`     | Malformed RPC envelope or invalid params.              |
-| `unknown_method`  | Method not registered in this contract revision.       |
-| `rate_limited`    | Bridge-internal rate limit hit. Retry with backoff.    |
-| `timeout`         | Tool exceeded its timeout budget.                      |
+| Code              | Meaning                                               |
+| ----------------- | ----------------------------------------------------- |
+| `transport_error` | WS / native host disconnected, request never reached. |
+| `rpc_invalid`     | Malformed RPC envelope or invalid params.             |
+| `unknown_method`  | Method not registered in this contract revision.      |
+| `rate_limited`    | Bridge-internal rate limit hit. Retry with backoff.   |
+| `timeout`         | Tool exceeded its timeout budget.                     |
 
 ### Browser surface
 
-| Code                  | Meaning                                                  |
-| --------------------- | -------------------------------------------------------- |
-| `target_gone`         | Tab/frame closed during call. Recover then retry.        |
-| `navigation_aborted`  | Navigation interrupted (programmatic or user).           |
-| `navigation_timeout`  | Navigation didn't complete within timeoutMs.             |
-| `cdp_failed`          | Chrome DevTools Protocol failure (debugger detached).    |
-| `frame_detached`      | The selected frame is gone.                              |
+| Code                 | Meaning                                               |
+| -------------------- | ----------------------------------------------------- |
+| `target_gone`        | Tab/frame closed during call. Recover then retry.     |
+| `navigation_aborted` | Navigation interrupted (programmatic or user).        |
+| `navigation_timeout` | Navigation didn't complete within timeoutMs.          |
+| `cdp_failed`         | Chrome DevTools Protocol failure (debugger detached). |
+| `frame_detached`     | The selected frame is gone.                           |
 
 ### DOM / interaction
 
-| Code                       | Meaning                                              |
-| -------------------------- | ---------------------------------------------------- |
-| `element_not_found`        | Selector / ref didn't resolve.                       |
-| `element_not_actionable`   | Resolved but covered, disabled, or zero-size.        |
-| `postcondition_failed`     | Mutating action did not produce expected change.     |
-| `duplicate_action`         | Submit-style guard prevented a second click.         |
+| Code                     | Meaning                                          |
+| ------------------------ | ------------------------------------------------ |
+| `element_not_found`      | Selector / ref didn't resolve.                   |
+| `element_not_actionable` | Resolved but covered, disabled, or zero-size.    |
+| `postcondition_failed`   | Mutating action did not produce expected change. |
+| `duplicate_action`       | Submit-style guard prevented a second click.     |
 
 ### Session
 
-| Code                    | Meaning                                                |
-| ----------------------- | ------------------------------------------------------ |
-| `session_invalid`       | Manifest invalidated (logged out, cookie purged, ...). |
-| `session_stale`         | TTL expired. Worker can extend or reacquire.           |
-| `session_locked`        | Another worker holds the session lock.                 |
-| `origin_not_permitted`  | Origin not in the bridge's allowed list.               |
+| Code                   | Meaning                                                |
+| ---------------------- | ------------------------------------------------------ |
+| `session_invalid`      | Manifest invalidated (logged out, cookie purged, ...). |
+| `session_stale`        | TTL expired. Worker can extend or reacquire.           |
+| `session_locked`       | Another worker holds the session lock.                 |
+| `origin_not_permitted` | Origin not in the bridge's allowed list.               |
 
 ### Adversarial environment
 
-| Code                  | Meaning                                                |
-| --------------------- | ------------------------------------------------------ |
-| `anti_bot_challenge`  | Cloudflare / DataDome / PerimeterX detected.           |
-| `captcha_required`    | reCAPTCHA / hCaptcha / Turnstile interactive challenge.|
-| `rate_limit_remote`   | Remote site (not bridge) is throttling.                |
+| Code                 | Meaning                                                 |
+| -------------------- | ------------------------------------------------------- |
+| `anti_bot_challenge` | Cloudflare / DataDome / PerimeterX detected.            |
+| `captcha_required`   | reCAPTCHA / hCaptcha / Turnstile interactive challenge. |
+| `rate_limit_remote`  | Remote site (not bridge) is throttling.                 |
 
 ## Retry hints
 

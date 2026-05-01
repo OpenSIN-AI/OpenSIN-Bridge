@@ -119,9 +119,11 @@ This gives downstream replay/inference code one deterministic source of truth wh
 ## Tooling surface
 
 ### `get_network_correlation_events`
+
 Returns the bounded MAIN-world network capture buffer.
 
 ### `export_recorded_session`
+
 Builds and returns the canonical session export schema. Optional inputs:
 
 - `sessionId`

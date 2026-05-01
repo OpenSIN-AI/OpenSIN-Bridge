@@ -17,17 +17,17 @@ bridge artifacts that satisfy its bridge-side requirements.
 
 ## Coverage matrix
 
-| Worker issue | Theme                       | Bridge artifacts                                                                                                                                              | Status |
-| ------------ | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| #68          | Architecture RFC            | (worker-only) — the bridge contract v1 (`docs/BRIDGE_CONTRACT_V1.md`) is the bridge-side input to the RFC.                                                       | done   |
-| #69          | Bridge contract             | `extension/src/contract/v1/index.js`, `extension/src/tools/contract.js`, `docs/BRIDGE_CONTRACT_V1.md`, `scripts/validate-bridge-contract.mjs`, `bridge.contract` RPC | done   |
-| #70          | Observability / evidence    | `extension/src/drivers/evidence.js`, `extension/src/drivers/trace.js`, `extension/src/tools/evidence.js`, `bridge.evidenceBundle` and `bridge.traces` RPCs       | done   |
-| #71          | Session lifecycle           | `extension/src/drivers/session-lifecycle.js`, `session.manifest`, `session.invalidate`, `session.lastKnownGood`, `session.health` RPCs                            | done   |
-| #72          | Runtime state machine       | (worker-only) — bridge exposes the primitives the FSM consumes (snapshot, dom.click, session.health, evidenceBundle, contract).                                 | n/a    |
-| #73          | Interaction engine          | (worker-only) — bridge already exposes actionability via `dom.fullSnapshot` + `dom.click` postcondition fields. Contract documents the failure codes.            | n/a    |
-| #74          | Stealth strategy            | `extension/src/tools/stealth.js`, `stealth.assess`, `stealth.detectChallenge`. The existing `stealth-main.js` is unchanged; this adds the assessment surface.    | done   |
-| #75          | Panel plugins               | (worker-only) — bridge stays panel-agnostic by design (`BOUNDARIES.md`).                                                                                         | n/a    |
-| #76          | Validation harness          | `scripts/validate-bridge-contract.mjs`, `test/contract/*.test.mjs`, `test/session/*.test.mjs`, `test/evidence/*.test.mjs`, package script `validate:bridge-contract` | done   |
+| Worker issue | Theme                    | Bridge artifacts                                                                                                                                                     | Status |
+| ------------ | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| #68          | Architecture RFC         | (worker-only) — the bridge contract v1 (`docs/BRIDGE_CONTRACT_V1.md`) is the bridge-side input to the RFC.                                                           | done   |
+| #69          | Bridge contract          | `extension/src/contract/v1/index.js`, `extension/src/tools/contract.js`, `docs/BRIDGE_CONTRACT_V1.md`, `scripts/validate-bridge-contract.mjs`, `bridge.contract` RPC | done   |
+| #70          | Observability / evidence | `extension/src/drivers/evidence.js`, `extension/src/drivers/trace.js`, `extension/src/tools/evidence.js`, `bridge.evidenceBundle` and `bridge.traces` RPCs           | done   |
+| #71          | Session lifecycle        | `extension/src/drivers/session-lifecycle.js`, `session.manifest`, `session.invalidate`, `session.lastKnownGood`, `session.health` RPCs                               | done   |
+| #72          | Runtime state machine    | (worker-only) — bridge exposes the primitives the FSM consumes (snapshot, dom.click, session.health, evidenceBundle, contract).                                      | n/a    |
+| #73          | Interaction engine       | (worker-only) — bridge already exposes actionability via `dom.fullSnapshot` + `dom.click` postcondition fields. Contract documents the failure codes.                | n/a    |
+| #74          | Stealth strategy         | `extension/src/tools/stealth.js`, `stealth.assess`, `stealth.detectChallenge`. The existing `stealth-main.js` is unchanged; this adds the assessment surface.        | done   |
+| #75          | Panel plugins            | (worker-only) — bridge stays panel-agnostic by design (`BOUNDARIES.md`).                                                                                             | n/a    |
+| #76          | Validation harness       | `scripts/validate-bridge-contract.mjs`, `test/contract/*.test.mjs`, `test/session/*.test.mjs`, `test/evidence/*.test.mjs`, package script `validate:bridge-contract` | done   |
 
 ## How to consume from the worker
 
