@@ -10,14 +10,14 @@ This document makes the validation surface explicit so OpenSIN coders, cloud run
 
 ## Command contract
 
-| Command | Purpose | What it runs | When to use it |
-|---|---|---|---|
-| `npm test` | Default local validation | Alias for `npm run test:default` | Use for routine local edits when you want the repo's standard fast gate |
-| `npm run test:contract` | Contract guard | Validates `package.json`, `test/validation-contract.json`, and issue suite registration | Runs before every other test surface so silent omissions fail loudly |
-| `npm run test:default` | Fast default suite | `test/default/**/*.test.js` after the contract guard | Use for quick feedback during development |
-| `npm run test:issue -- --issue=27` | Issue-scoped regression validation | Only the registered suite for the requested issue | Use before closing an issue or when debugging a specific regression |
-| `npm run test:all` | Full repo validation | Default suite plus every registered issue suite | Use before handoff when changes could affect more than one issue surface |
-| `npm run verify:pr` | Pull-request verification contract | `npm run test:all` plus `npm run build` | Use before opening or updating a pull request |
+| Command                            | Purpose                            | What it runs                                                                            | When to use it                                                           |
+| ---------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `npm test`                         | Default local validation           | Alias for `npm run test:default`                                                        | Use for routine local edits when you want the repo's standard fast gate  |
+| `npm run test:contract`            | Contract guard                     | Validates `package.json`, `test/validation-contract.json`, and issue suite registration | Runs before every other test surface so silent omissions fail loudly     |
+| `npm run test:default`             | Fast default suite                 | `test/default/**/*.test.js` after the contract guard                                    | Use for quick feedback during development                                |
+| `npm run test:issue -- --issue=27` | Issue-scoped regression validation | Only the registered suite for the requested issue                                       | Use before closing an issue or when debugging a specific regression      |
+| `npm run test:all`                 | Full repo validation               | Default suite plus every registered issue suite                                         | Use before handoff when changes could affect more than one issue surface |
+| `npm run verify:pr`                | Pull-request verification contract | `npm run test:all` plus `npm run build`                                                 | Use before opening or updating a pull request                            |
 
 ## Registration rules for issue-scoped tests
 
