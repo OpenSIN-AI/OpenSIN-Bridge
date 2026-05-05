@@ -166,7 +166,7 @@ Diese Integration ist Teil des größeren **OpenSIN AI Agent Systems**:
 
 - **[OpenSIN-Bridge](https://github.com/OpenSIN-AI/OpenSIN-Bridge)**: Browser-Extension für Agent-Interaktion
 - **[OpenSIN-stealth-browser](https://github.com/OpenSIN-AI/OpenSIN-stealth-browser)**: Python-basierter Stealth-Browser
-- **[Infra-SIN-OpenCode-Stack](https://github.com/OpenSIN-AI/Infra-SIN-OpenCode-Stack)**: Infrastruktur und Visualisierung
+- **[Infra-SIN-OpenCode-Stack](https://github.com/OpenSIN-Code/Infra-SIN-OpenCode-Stack)**: Infrastruktur und Visualisierung
 - **[OpenSIN-overview](https://github.com/OpenSIN-AI/OpenSIN-overview)**: Gesamtübersicht des Systems
 
 ---
