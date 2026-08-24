@@ -1,0 +1,25 @@
+{
+  "name": "opensin-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenSIN Bridge \u2014 Thin-Client Chrome Extension + Server-Side SaaS Brain",
+  "scripts": {
+    "ext:dev": "echo 'Load extension/ folder in chrome://extensions (Developer Mode)'",
+    "ext:package": "mkdir -p dist && cd extension && zip -r ../dist/opensin-bridge-extension.zip . -x '*.DS_Store'",
+    "server:dev": "wrangler dev server/src/index.ts",
+    "deploy:server": "wrangler deploy server/src/index.ts",
+    "build": "npm run ext:package && echo 'Server deploys via wrangler'",
+    "test": "echo 'TODO: Add tests'",
+    "issue:worktree": "bash scripts/create_issue_worktree.sh",
+    "verify:issue-scope": "bash scripts/verify_issue_scope.sh",
+    "test:issue-worktree": "node --test test/issue-worktree.test.js"
+  },
+  "keywords": [
+    "chrome-extension",
+    "saas",
+    "automation",
+    "opensin"
+  ],
+  "author": "OpenSIN-AI",
+  "license": "UNLICENSED"
+}

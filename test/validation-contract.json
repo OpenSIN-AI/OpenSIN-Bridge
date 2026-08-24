@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "defaultSuiteDirectories": [
+    "test/default"
+  ],
+  "issueSuites": [
+    {
+      "issue": "27",
+      "title": "validation contract alignment",
+      "directory": "test/issues/issue-27",
+      "requiredIn": [
+        "test:all",
+        "verify:pr"
+      ]
+    }
+  ],
+  "prVerification": {
+    "commands": [
+      "npm run test:all",
+      "npm run build"
+    ]
+  }
+}

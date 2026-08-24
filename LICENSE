@@ -1,0 +1,39 @@
+# PROPRIETARY LICENSE
+
+Copyright (c) 2026 OpenSIN-AI. All rights reserved.
+
+This software and associated documentation files (the "Software") are the
+exclusive property of OpenSIN-AI. The Software is NOT open source.
+
+## Restrictions
+
+1. **No Redistribution:** You may NOT copy, modify, merge, publish, distribute,
+   sublicense, or sell copies of the Software.
+
+2. **No Reverse Engineering:** You may NOT reverse engineer, decompile, or
+   disassemble the server-side components of this Software.
+
+3. **Trade Secret:** The server-side code (`server/` directory) constitutes
+   trade secret material. Unauthorized disclosure is subject to legal action.
+
+4. **Extension Use:** The Chrome Extension component may be installed and used
+   by end users who hold a valid, paid subscription.
+
+## Server-Side Code
+
+The contents of the `server/` directory are trade secrets and proprietary
+business logic. Access to this code is restricted to authorized OpenSIN-AI
+team members only.
+
+## Extension Code
+
+The Chrome Extension code in `extension/` is distributed via the Chrome Web
+Store. While the code is technically visible to users (as required by Chrome
+Web Store policies), it remains copyrighted and may not be used to create
+competing products.
+
+## Enforcement
+
+Violations of this license will be pursued to the fullest extent of applicable law.
+
+For licensing inquiries: legal@opensin.ai

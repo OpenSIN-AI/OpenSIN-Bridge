@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenSIN Bridge — Settings</title>
+    <link rel="stylesheet" href="../popup/popup.css" />
+    <style>
+      body { width: 560px; min-height: 0; padding: 18px; }
+      form { display: flex; flex-direction: column; gap: 12px; }
+      label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; }
+      input[type="text"], input[type="url"], input[type="number"], select, textarea {
+        background: var(--bg-elev);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font: inherit;
+      }
+      textarea { min-height: 80px; font-family: ui-monospace, monospace; font-size: 11px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .actions { display: flex; gap: 8px; margin-top: 8px; }
+      .help { font-weight: 400; color: var(--muted); font-size: 11px; }
+      hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+    </style>
+  </head>
+  <body>
+    <h1 style="margin: 0 0 12px 0; font-size: 16px;">OpenSIN Bridge — Settings</h1>
+    <form id="form">
+      <label>
+        Server WebSocket URL
+        <input type="url" id="wsUrl" placeholder="wss://…" required />
+        <span class="help">The bridge server your agent connects to.</span>
+      </label>
+
+      <label>
+        Native Host name
+        <input type="text" id="nativeHost" placeholder="com.opensin.bridge" />
+        <span class="help">Name registered in your Native Messaging manifest.</span>
+      </label>
+
+      <div class="grid">
+        <label>
+          <span>Autostart WebSocket</span>
+          <select id="autostartWs">
+            <option value="true">On</option>
+            <option value="false">Off</option>
+          </select>
+        </label>
+        <label>
+          <span>Autostart Native Host</span>
+          <select id="autostartNative">
+            <option value="false">Off</option>
+            <option value="true">On</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="grid">
+        <label>
+          Heartbeat (ms)
+          <input type="number" id="heartbeatMs" min="1000" step="1000" />
+        </label>
+        <label>
+          Backoff max (ms)
+          <input type="number" id="backoffMaxMs" min="1000" step="1000" />
+        </label>
+      </div>
+
+      <hr />
+
+      <label>
+        Allowed external extension IDs
+        <textarea id="externallyAllowed" placeholder="extension-id-1&#10;extension-id-2"></textarea>
+        <span class="help">Only these extensions may call bridge tools via onMessageExternal.</span>
+      </label>
+
+      <label>
+        Vision provider
+        <select id="visionProvider">
+          <option value="gateway">Vercel AI Gateway</option>
+          <option value="groq">Groq</option>
+          <option value="openai">OpenAI</option>
+          <option value="google">Google Gemini</option>
+          <option value="none">Disabled</option>
+        </select>
+      </label>
+
+      <label>
+        Vision API key (stored locally)
+        <input type="text" id="visionKey" placeholder="(empty = use server relay)" />
+      </label>
+
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">Save</button>
+        <button class="btn" type="button" id="reset">Reset</button>
+        <span id="saved" class="muted"></span>
+      </div>
+    </form>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

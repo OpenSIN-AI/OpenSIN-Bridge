@@ -1,0 +1,244 @@
+/**
+ * ==============================================================================
+ * OpenSIN Component: index.ts
+ * ==============================================================================
+ * 
+ * DESCRIPTION / BESCHREIBUNG:
+ * Source file for the OpenSIN ecosystem.
+ * 
+ * WHY IT EXISTS / WARUM ES EXISTIERT:
+ * Essential logic for autonomous agent cooperation.
+ * 
+ * RULES / REGELN:
+ * 1. EXTENSIVE LOGGING: Every function call must be traceable.
+ * 2. NO ASSUMPTIONS: Validate all inputs and external states.
+ * 3. SECURITY FIRST: Never leak credentials or session data.
+ * 
+ * CONSEQUENCES / KONSEQUENZEN:
+ * Incorrect modification may disrupt agent communication or task execution.
+ * 
+ * AUTHOR: SIN-Zeus / A2A Fleet
+ * ==============================================================================
+ */
+
+
+import '../../extension/shared/deterministic-primitives.js';
+
+// The runtime helper is loaded for side effects so the worker can reuse the same
+// evidence-based deterministic rule set as the extension. We intentionally keep
+// the helper optional because fallback behavior must continue to work even if the
+// import is unavailable in a different runtime packaging mode.
+const deterministicPrimitives = (globalThis as { __OpenSINDeterministicPrimitives?: any }).__OpenSINDeterministicPrimitives || null;
+
+export interface Env {
+  SUPABASE_URL: string;
+  SUPABASE_SERVICE_KEY: string;
+  STRIPE_SECRET_KEY: string;
+  STRIPE_WEBHOOK_SECRET: string;
+  OPENAI_API_KEY: string;
+  ENVIRONMENT: string;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': 'chrome-extension://*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    };
+
+    if (request.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
+
+    try {
+      if (path === '/api/v1/auth/login') return handleLogin(request, env, corsHeaders);
+      if (path === '/api/v1/auth/refresh') return handleRefresh(request, env, corsHeaders);
+      if (path === '/api/v1/stripe/webhook') return handleStripeWebhook(request, env);
+      
+      const authResult = await validateAuth(request, env);
+      if (!authResult.valid) return json({ error: authResult.error }, authResult.status, corsHeaders);
+      
+      if (path === '/api/v1/stripe/checkout') return handleStripeCheckout(request, authResult.userId!, env, corsHeaders);
+      
+      const subActive = await checkSubscription(authResult.userId!, env);
+      if (!subActive && path !== '/api/v1/subscription/status') {
+        return json({ error: 'Subscription required', upgrade_url: 'https://my.opensin.ai/pricing' }, 402, corsHeaders);
+      }
+
+      if (path === '/api/v1/decide') return handleDecide(request, authResult.userId!, env, corsHeaders);
+      if (path === '/api/v1/evaluate-study') return handleEvaluateStudy(request, authResult.userId!, env, corsHeaders);
+      if (path === '/api/v1/persona') return handlePersona(request, authResult.userId!, env, corsHeaders);
+      if (path === '/api/v1/subscription/status') return json({ active: subActive, plan: subActive ? 'pro' : 'free' }, 200, corsHeaders);
+
+      return json({ error: 'Not found' }, 404, corsHeaders);
+    } catch (err) {
+      return json({ error: 'Internal server error' }, 500, corsHeaders);
+    }
+  },
+};
+
+function json(data: unknown, status: number = 200, extraHeaders: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', ...extraHeaders } });
+}
+
+async function validateAuth(request: Request, env: Env) {
+  const token = request.headers.get('Authorization')?.replace('Bearer ', '');
+  if (!token) return { valid: false, error: 'Missing auth', status: 401 };
+  
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+    headers: { 'Authorization': `Bearer ${token}`, 'apikey': env.SUPABASE_SERVICE_KEY },
+  });
+  if (!res.ok) return { valid: false, error: 'Invalid token', status: 401 };
+  const user = await res.json() as { id: string };
+  return { valid: true, userId: user.id };
+}
+
+async function checkSubscription(userId: string, env: Env) {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/check_active_subscription`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': env.SUPABASE_SERVICE_KEY,
+      'Authorization': `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+    },
+    body: JSON.stringify({ p_user_id: userId }),
+  });
+  if (!res.ok) return false;
+  return (await res.json()) === true;
+}
+
+// Secret Sauce: The Decision Engine
+async function handleDecide(request: Request, userId: string, env: Env, headers: Record<string, string>) {
+  const { dom_snapshot, current_url, context } = await request.json() as any;
+
+  // Deterministic fast-path:
+  // Known button families such as Save / Continue / Submit should not consume an
+  // LLM round-trip when the DOM snapshot already gives us a unique safe target.
+  const deterministicDecision = deterministicPrimitives?.resolveDeterministicButtonAction?.(
+    dom_snapshot,
+    current_url,
+    context?.targetText || context?.description || ''
+  );
+  if (deterministicDecision) {
+    return json(deterministicDecision, 200, headers);
+  }
+  
+  const systemPrompt = `You are an autonomous browser agent. You receive a DOM snapshot (forms, buttons, links) and current URL.
+Analyze the page state and decide the exact next interaction.
+Respond strictly in JSON format matching one of these structures:
+{ "action": "click", "selector": "#id" }
+{ "action": "type", "selector": "#id", "text": "value" }
+{ "action": "select", "selector": "#id", "value": "value" }
+{ "action": "wait", "duration": 5 }
+{ "action": "extract" }
+{ "action": "navigate", "url": "https://..." }
+Think carefully before acting to avoid detection.`;
+
+  const userPrompt = `URL: ${current_url}\nContext: ${JSON.stringify(context || {})}\nDOM: ${JSON.stringify(dom_snapshot).substring(0, 10000)}`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+      response_format: { type: 'json_object' }
+    })
+  });
+
+  const aiData = await res.json() as any;
+  const decision = JSON.parse(aiData.choices?.[0]?.message?.content || '{"action":"wait","duration":10}');
+  return json(decision, 200, headers);
+}
+
+// Secret Sauce: Persona Engine
+async function handlePersona(request: Request, userId: string, env: Env, headers: Record<string, string>) {
+  const { question_text, options, current_url } = await request.json() as any;
+
+  // Deterministic fast-path:
+  // We only short-circuit patterns that have been explicitly proven safe. Every
+  // unknown or ambiguous question still falls through to the adaptive persona
+  // engine below.
+  const deterministicAnswer = deterministicPrimitives?.resolveDeterministicPersonaAnswer?.(
+    question_text,
+    options,
+    current_url || ''
+  );
+  if (deterministicAnswer) {
+    return json(deterministicAnswer, 200, headers);
+  }
+
+  // Real persona data would be retrieved securely from Supabase here
+  const personaPrompt = `You are a 28-year-old software engineer living in Germany.
+Question: ${question_text}
+Options: ${JSON.stringify(options)}
+Select the most accurate answer matching your persona.
+Return JSON: { "answer": "The exact option string", "confidence": 0.95 }`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'system', content: personaPrompt }],
+      response_format: { type: 'json_object' }
+    })
+  });
+
+  const aiData = await res.json() as any;
+  const answer = JSON.parse(aiData.choices?.[0]?.message?.content || '{"answer":null,"confidence":0}');
+  return json(answer, 200, headers);
+}
+
+async function handleEvaluateStudy(request: Request, userId: string, env: Env, headers: Record<string, string>) {
+  return json({ accept: true, risk: 'low', reasoning: 'Auto-accepted based on heuristic parameters.' }, 200, headers);
+}
+
+async function handleLogin(request: Request, env: Env, headers: Record<string, string>) {
+  const { email, password } = await request.json() as { email: string; password: string };
+  if (!email || !password) return json({ error: 'email and password required' }, 400, headers);
+
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': env.SUPABASE_SERVICE_KEY,
+    },
+    body: JSON.stringify({ email, password }),
+  });
+
+  const data = await res.json() as any;
+  if (!res.ok) return json({ error: data.error_description || data.msg || 'Login failed' }, 401, headers);
+
+  return json({
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_in: data.expires_in,
+    user: { id: data.user?.id, email: data.user?.email },
+  }, 200, headers);
+}
+
+async function handleRefresh(request: Request, env: Env, headers: Record<string, string>) {
+  const { refresh_token } = await request.json() as { refresh_token: string };
+  if (!refresh_token) return json({ error: 'refresh_token required' }, 400, headers);
+
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': env.SUPABASE_SERVICE_KEY,
+    },
+    body: JSON.stringify({ refresh_token }),
+  });
+
+  const data = await res.json() as any;
+  if (!res.ok) return json({ error: data.error_description || 'Refresh failed' }, 401, headers);
+
+  return json({
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_in: data.expires_in,
+  }, 200, headers);
+}

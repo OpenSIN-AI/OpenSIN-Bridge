@@ -1,0 +1,1 @@
+Use simple vanilla JavaScript in the extension and preserve existing direct helper-style patterns instead of adding heavy abstractions. Keep Chrome MV3 constraints in mind, prefer backward-compatible changes, and include extensive explanatory comments in code files. Brand naming should stay OpenSIN/sincode.

@@ -1,0 +1,1 @@
+Core commands: npm install, npm run ext:dev, npm run ext:package, npm run server:dev, npm run deploy:server, npm run build. Standard macOS utilities available: git, ls, pwd, grep, bash/zsh, node, npm.
